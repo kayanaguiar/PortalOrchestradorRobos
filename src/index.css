@@ -1,0 +1,91 @@
+@import "tailwindcss";
+
+@theme {
+  --color-surface-900: #0a0e1a;
+  --color-surface-800: #0f1424;
+  --color-surface-700: #151b30;
+  --color-surface-600: #1c2440;
+  --color-surface-500: #252e4a;
+  --color-accent: #0067ff;
+  --color-accent-light: #3d8bff;
+  --color-accent-dim: #0067ff33;
+  --color-status-running: #00e676;
+  --color-status-paused: #ffc107;
+  --color-status-stopped: #78909c;
+  --color-status-error: #ff1744;
+  --font-display: "Plus Jakarta Sans", sans-serif;
+  --font-mono: "JetBrains Mono", monospace;
+}
+
+body {
+  margin: 0;
+  background: var(--color-surface-900);
+  color: #e2e8f0;
+  font-family: var(--font-display);
+  -webkit-font-smoothing: antialiased;
+}
+
+/* Scrollbar styling */
+::-webkit-scrollbar {
+  width: 6px;
+}
+::-webkit-scrollbar-track {
+  background: var(--color-surface-800);
+}
+::-webkit-scrollbar-thumb {
+  background: var(--color-surface-500);
+  border-radius: 3px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: var(--color-accent);
+}
+
+/* HUD grid background */
+.hud-grid {
+  background-image:
+    linear-gradient(rgba(0, 103, 255, 0.03) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(0, 103, 255, 0.03) 1px, transparent 1px);
+  background-size: 40px 40px;
+}
+
+/* Glow effects */
+.glow-running {
+  box-shadow: 0 0 20px rgba(0, 230, 118, 0.15), 0 0 60px rgba(0, 230, 118, 0.05);
+}
+.glow-error {
+  box-shadow: 0 0 20px rgba(255, 23, 68, 0.15), 0 0 60px rgba(255, 23, 68, 0.05);
+}
+.glow-accent {
+  box-shadow: 0 0 20px rgba(0, 103, 255, 0.2), 0 0 60px rgba(0, 103, 255, 0.08);
+}
+
+/* Pulse animation for running status */
+@keyframes status-pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.4; }
+}
+.pulse-running {
+  animation: status-pulse 2s ease-in-out infinite;
+}
+
+/* Scan line effect */
+@keyframes scanline {
+  0% { transform: translateY(-100%); }
+  100% { transform: translateY(100%); }
+}
+.scanline::after {
+  content: "";
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  height: 40px;
+  background: linear-gradient(
+    to bottom,
+    transparent,
+    rgba(0, 103, 255, 0.03),
+    transparent
+  );
+  animation: scanline 8s linear infinite;
+  pointer-events: none;
+}
