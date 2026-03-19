@@ -435,6 +435,36 @@ async def get_sessions():
     return result
 
 
+# ─── Triggers (ProcessSchedules) ──────────────────────────
+
+@app.get("/api/triggers")
+async def get_triggers():
+    """Busca todos os gatilhos de todos os orchestrators."""
+    cached = get_cached("triggers", ttl=10)
+    if cached:
+        return cached
+    all_triggers = await request_all_orchestrators("ProcessSchedules")
+    result = {"value": all_triggers}
+    set_cached("triggers", result)
+    return result
+
+
+class SetEnableRequest(BaseModel):
+    orchestratorId: str
+    scheduleId: int
+    enabled: bool
+
+
+@app.post("/api/triggers/set-enable")
+async def set_trigger_enable(req: SetEnableRequest):
+    """Habilita ou desabilita um gatilho."""
+    orch = _find_orchestrator(req.orchestratorId)
+    body = {"enabled": req.enabled, "scheduleIds": [req.scheduleId]}
+    result = await uipath_post(orch, "ProcessSchedules/UiPath.Server.Configuration.OData.SetEnable", body)
+    clear_cache()
+    return result
+
+
 # ─── Archived Processes ───────────────────────────────────
 
 ARCHIVED_FILE = os.path.join(os.path.dirname(__file__), "data", "archived_processes.json")

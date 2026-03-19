@@ -97,6 +97,16 @@ export async function fetchSessions() {
   return request(`${API_BASE}/sessions`);
 }
 
+// ─── Triggers ────────────────────────────────────
+
+export async function fetchTriggers() {
+  return request(`${API_BASE}/triggers`);
+}
+
+export async function setTriggerEnable(orchestratorId, scheduleId, enabled) {
+  return postRequest("/triggers/set-enable", { orchestratorId, scheduleId, enabled });
+}
+
 // ─── Archived Processes ──────────────────────────
 
 export async function fetchArchivedProcesses() {

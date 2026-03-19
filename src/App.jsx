@@ -8,6 +8,7 @@ import ActivityTable from "./components/ActivityTable";
 import RobotsPage from "./components/pages/RobotsPage";
 import LogsPage from "./components/pages/LogsPage";
 import SettingsPage from "./components/pages/SettingsPage";
+import TriggersPage from "./components/pages/TriggersPage";
 import { useUiPathLogs, useUiPathJobs, useUiPathProcesses, useUiPathSessions, useUiPathHealth } from "./hooks/useUiPathData";
 import ConfirmModal from "./components/ConfirmModal";
 import Toast from "./components/Toast";
@@ -17,6 +18,7 @@ const pageConfig = {
   "/": { id: "dashboard", title: "Dashboard", subtitle: "VISÃO GERAL" },
   "/robots": { id: "robots", title: "Robôs", subtitle: "GERENCIAMENTO E DETALHES" },
   "/history": { id: "logs", title: "Histórico de Jobs", subtitle: "EXECUÇÕES DE TODOS OS ROBÔS" },
+  "/triggers": { id: "triggers", title: "Gatilhos", subtitle: "AGENDAMENTOS E TRIGGERS" },
   "/settings": { id: "settings", title: "Configurações", subtitle: "ORCHESTRATORS E CONEXÕES" },
 };
 
@@ -514,7 +516,7 @@ export default function App() {
   return (
     <div className="min-h-screen hud-grid scanline">
       <Sidebar activePage={activePage} onNavigate={(id) => {
-        const routes = { dashboard: "/", robots: "/robots", logs: "/history", settings: "/settings" };
+        const routes = { dashboard: "/", robots: "/robots", logs: "/history", triggers: "/triggers", settings: "/settings" };
         navigate(routes[id] || "/");
       }} collapsed={sidebarCollapsed} onToggle={toggleSidebar} />
 
@@ -573,6 +575,9 @@ export default function App() {
           } />
           <Route path="/history" element={
             <LogsPage robots={robots} searchTerm={searchTerm} />
+          } />
+          <Route path="/triggers" element={
+            <TriggersPage addToast={addToast} />
           } />
           <Route path="/settings" element={
             <SettingsPage

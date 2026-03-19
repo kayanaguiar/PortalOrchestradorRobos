@@ -3,6 +3,7 @@ import {
   Bot,
   ScrollText,
   Settings,
+  Timer,
   Radio,
   ChevronRight,
   ChevronLeft,
@@ -15,6 +16,7 @@ const navItems = [
   { icon: LayoutDashboard, label: "Dashboard", id: "dashboard" },
   { icon: Bot, label: "Robôs", id: "robots" },
   { icon: ScrollText, label: "Histórico", id: "logs" },
+  { icon: Timer, label: "Gatilhos", id: "triggers" },
   { icon: Settings, label: "Configurações", id: "settings" },
 ];
 
