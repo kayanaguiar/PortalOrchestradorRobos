@@ -53,7 +53,7 @@ async def uipath_post(orch: dict, endpoint: str, body: dict | None = None) -> di
         )
         if response.status_code not in (200, 201, 202, 204):
             raise HTTPException(status_code=response.status_code, detail=response.text)
-        if response.status_code == 204:
+        if response.status_code == 204 or not response.content:
             return {"status": "ok"}
         return response.json()
 
@@ -103,24 +103,28 @@ async def request_all_orchestrators(endpoint: str, params: dict | None = None) -
 
 @app.get("/api/health")
 async def health():
-    """Verifica conexão com pelo menos um orchestrator."""
+    """Verifica conexão com cada orchestrator individualmente."""
     orchestrators = load_orchestrators()
     connected_count = 0
+    orch_statuses = []
 
     for orch in orchestrators:
         if not orch.get("clientId") or not orch.get("clientSecret"):
+            orch_statuses.append({"id": orch["id"], "name": orch["name"], "connected": False, "error": "Sem credenciais"})
             continue
         try:
             await get_token(orch["id"], orch["clientId"], orch["clientSecret"])
             connected_count += 1
-        except Exception:
-            pass
+            orch_statuses.append({"id": orch["id"], "name": orch["name"], "connected": True})
+        except Exception as e:
+            orch_statuses.append({"id": orch["id"], "name": orch["name"], "connected": False, "error": str(e)})
 
     return {
         "status": "ok" if connected_count > 0 else "disconnected",
         "connected": connected_count > 0,
         "orchestratorCount": len(orchestrators),
         "connectedCount": connected_count,
+        "orchestrators": orch_statuses,
     }
 
 
@@ -243,6 +247,16 @@ async def stop_job(req: JobActionRequest):
 
 
 
+def _version_is_newer(latest: str, current: str) -> bool:
+    """Compara versões semânticas (ex: 1.1.89 vs 1.1.83). Retorna True se latest > current."""
+    try:
+        l = [int(x) for x in latest.split(".")]
+        c = [int(x) for x in current.split(".")]
+        return l > c
+    except (ValueError, AttributeError):
+        return False
+
+
 # ─── Processes ────────────────────────────────────────────
 
 @app.get("/api/processes")
@@ -263,8 +277,14 @@ async def get_processes():
                     {"$orderby": "Version desc", "$top": 1},
                 )
                 latest = (versions.get("value") or [{}])[0]
-                proc["_latestVersion"] = latest.get("Version")
-                proc["_hasUpdate"] = proc.get("ProcessVersion") != latest.get("Version")
+                latest_version = latest.get("Version")
+                current_version = proc.get("ProcessVersion")
+                proc["_latestVersion"] = latest_version
+                # Só marca update se a versão mais recente existir e for maior que a atual
+                proc["_hasUpdate"] = bool(
+                    latest_version and current_version and latest_version != current_version
+                    and _version_is_newer(latest_version, current_version)
+                )
             except Exception:
                 proc["_latestVersion"] = None
                 proc["_hasUpdate"] = False
@@ -320,11 +340,41 @@ async def get_machines():
 
 # ─── Sessions (Robots conectados / Assistant) ────────────
 
+# Guarda assistants que estavam online no último check
+_previous_online_assistants: dict[str, dict] = {}
+
+
 @app.get("/api/sessions")
 async def get_sessions():
-    """Busca sessões ativas de robôs (mostra quem está com Assistant conectado)."""
+    """Busca sessões ativas e detecta assistants que ficaram offline."""
+    global _previous_online_assistants
     all_sessions = await request_all_orchestrators("Sessions")
-    return {"value": all_sessions}
+
+    # Identifica assistants online agora
+    current_online = {}
+    for s in all_sessions:
+        if s.get("Source") == "Assistant" and s.get("State") == "Available" and s.get("HostMachineName"):
+            key = f"{s.get('_orchestratorId')}::{s['Id']}"
+            current_online[key] = {
+                "id": s["Id"],
+                "machineName": s.get("MachineName") or s.get("HostMachineName"),
+                "hostMachineName": s.get("HostMachineName"),
+                "orchestratorId": s.get("_orchestratorId"),
+                "orchestratorName": s.get("_orchestratorName"),
+            }
+
+    # Detecta quem sumiu
+    gone_offline = []
+    for key, info in _previous_online_assistants.items():
+        if key not in current_online:
+            gone_offline.append(info)
+
+    _previous_online_assistants = current_online
+
+    return {
+        "value": all_sessions,
+        "recentlyOffline": gone_offline,
+    }
 
 
 # ─── Settings ─────────────────────────────────────────────

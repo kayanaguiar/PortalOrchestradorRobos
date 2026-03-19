@@ -1,4 +1,5 @@
 import { useState, useEffect, useMemo, useCallback } from "react";
+import { useSearchParams } from "react-router-dom";
 import {
   Monitor,
   Clock,
@@ -6,12 +7,14 @@ import {
   Zap,
   Play,
   Square,
+  XOctagon,
   RotateCcw,
   ChevronLeft,
   ChevronDown,
   ChevronRight,
   Server,
   Loader2,
+  Search,
 } from "lucide-react";
 import { motion } from "motion/react";
 import { fetchLogs, fetchJobs } from "../../services/api";
@@ -70,18 +73,16 @@ function formatDateTime(ts) {
   return `${formatDate(ts)} ${formatTime(ts)}`;
 }
 
-export default function RobotsPage({ robots, onAction, initialSelectedId, onClearSelection }) {
-  const [selectedRobotId, setSelectedRobotId] = useState(initialSelectedId || null);
+export default function RobotsPage({ robots, onAction, searchTerm: externalSearch }) {
+  const [searchParams, setSearchParams] = useSearchParams();
+  const [selectedRobotId, setSelectedRobotId] = useState(searchParams.get("selected") || null);
   const [robotJobs, setRobotJobs] = useState([]);
   const [jobsLoading, setJobsLoading] = useState(false);
   const [expandedJobKey, setExpandedJobKey] = useState(null);
   const [jobLogs, setJobLogs] = useState({});
   const [jobLogsLoading, setJobLogsLoading] = useState(null);
   const [dateFilter, setDateFilter] = useState(new Date().toISOString().split("T")[0]);
-
-  useEffect(() => {
-    if (initialSelectedId) setSelectedRobotId(initialSelectedId);
-  }, [initialSelectedId]);
+  const [logSearchTerm, setLogSearchTerm] = useState("");
 
   const selectedRobot = robots.find((r) => r.id === selectedRobotId);
 
@@ -151,7 +152,7 @@ export default function RobotsPage({ robots, onAction, initialSelectedId, onClea
 
   const handleBack = () => {
     setSelectedRobotId(null);
-    onClearSelection?.();
+    setSearchParams({});
   };
 
   // ─── Detail View ───────────────────────────────
@@ -186,7 +187,10 @@ export default function RobotsPage({ robots, onAction, initialSelectedId, onClea
             </div>
             <div className="flex gap-2">
               {selectedRobot.status === "running" && (
-                <ActionBtn icon={Square} label="Parar" variant="danger" onClick={() => onAction(selectedRobot.id, "stop")} />
+                <>
+                  <ActionBtn icon={Square} label="Parar" variant="warning" onClick={() => onAction(selectedRobot.id, "stop")} />
+                  <ActionBtn icon={XOctagon} label="Encerrar" variant="danger" onClick={() => onAction(selectedRobot.id, "kill")} />
+                </>
               )}
               {selectedRobot.status === "stopped" && (
                 <ActionBtn icon={Play} label="Iniciar" variant="success" onClick={() => onAction(selectedRobot.id, "start")} />
@@ -210,14 +214,26 @@ export default function RobotsPage({ robots, onAction, initialSelectedId, onClea
 
         {/* Logs by execution */}
         <div className="rounded-xl border border-white/5 bg-surface-800/60 overflow-hidden">
-          <div className="px-5 py-4 border-b border-white/5 flex items-center justify-between">
-            <div>
+          <div className="px-5 py-4 border-b border-white/5 flex items-center justify-between gap-3">
+            <div className="shrink-0">
               <h3 className="text-sm font-semibold text-white">Execuções</h3>
               <p className="text-[11px] text-white/30 mt-0.5 font-mono">
-                {executions.length} EXECUÇÕES — CLIQUE PARA VER LOGS
+                {executions.length} EXECUÇÕES
               </p>
             </div>
-            <DatePicker value={dateFilter} onChange={setDateFilter} />
+            <div className="flex items-center gap-3">
+              <div className="relative">
+                <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-white/20" />
+                <input
+                  type="text"
+                  value={logSearchTerm}
+                  onChange={(e) => setLogSearchTerm(e.target.value)}
+                  placeholder="Buscar nos logs..."
+                  className="bg-surface-900/60 border border-white/5 rounded-lg pl-8 pr-3 py-1.5 text-xs text-white/60 placeholder:text-white/15 focus:outline-none focus:border-accent/30 w-48 transition-all"
+                />
+              </div>
+              <DatePicker value={dateFilter} onChange={setDateFilter} />
+            </div>
           </div>
 
           {jobsLoading && (
@@ -302,7 +318,9 @@ export default function RobotsPage({ robots, onAction, initialSelectedId, onClea
                         Nenhum log encontrado para este job
                       </div>
                     )}
-                    {!isLoadingLogs && logs.map((log, j) => (
+                    {!isLoadingLogs && logs.filter((log) =>
+                      !logSearchTerm || log.Message?.toLowerCase().includes(logSearchTerm.toLowerCase())
+                    ).map((log, j) => (
                       <div
                         key={j}
                         className="px-5 pl-14 py-2 flex items-center gap-3 border-b border-white/[0.02]"
@@ -346,7 +364,7 @@ export default function RobotsPage({ robots, onAction, initialSelectedId, onClea
               initial={{ opacity: 0, x: -10 }}
               animate={{ opacity: 1, x: 0 }}
               transition={{ delay: i * 0.06 }}
-              onClick={() => setSelectedRobotId(robot.id)}
+              onClick={() => { setSelectedRobotId(robot.id); setSearchParams({ selected: robot.id }); }}
               className="px-5 py-4 flex items-center gap-5 hover:bg-white/[0.03] transition-colors cursor-pointer"
             >
               <div className={`w-2.5 h-2.5 rounded-full shrink-0 ${config.bg} ${config.dotClass}`} />
@@ -395,6 +413,7 @@ function InfoCard({ icon: Icon, label, value }) {
 
 const variantStyles = {
   success: "border-status-running/30 text-status-running hover:bg-status-running/10",
+  warning: "border-status-paused/30 text-status-paused hover:bg-status-paused/10",
   danger: "border-status-error/30 text-status-error hover:bg-status-error/10",
   accent: "border-accent/30 text-accent hover:bg-accent/10",
 };

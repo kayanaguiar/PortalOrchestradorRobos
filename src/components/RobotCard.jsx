@@ -1,6 +1,7 @@
 import {
   Play,
   Square,
+  XOctagon,
   RotateCcw,
   Monitor,
   Clock,
@@ -183,12 +184,20 @@ export default function RobotCard({ robot, index, onAction, onClick, loading }) 
             </div>
           )}
           {!loading && robot.status === "running" && (
-            <ActionButton
-              icon={Square}
-              label="Parar"
-              onClick={() => onAction(robot.id, "stop")}
-              variant="danger"
-            />
+            <>
+              <ActionButton
+                icon={Square}
+                label="Parar"
+                onClick={() => onAction(robot.id, "stop")}
+                variant="warning"
+              />
+              <ActionButton
+                icon={XOctagon}
+                label="Encerrar"
+                onClick={() => onAction(robot.id, "kill")}
+                variant="danger"
+              />
+            </>
           )}
           {!loading && robot.status === "stopped" && (
             <ActionButton

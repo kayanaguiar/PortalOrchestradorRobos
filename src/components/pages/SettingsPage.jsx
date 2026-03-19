@@ -24,7 +24,7 @@ function formatTime(ts) {
   });
 }
 
-export default function SettingsPage({ pollingInterval, onPollingChange }) {
+export default function SettingsPage({ pollingInterval, onPollingChange, searchTerm = "" }) {
   const [orchestrators, setOrchestrators] = useState([]);
   const [localInterval, setLocalInterval] = useState(pollingInterval);
   const [saving, setSaving] = useState(false);
@@ -163,7 +163,11 @@ export default function SettingsPage({ pollingInterval, onPollingChange }) {
       </div>
 
       <div className="space-y-4">
-        {orchestrators.map((orch, i) => {
+        {orchestrators.filter((o) => {
+          if (!searchTerm) return true;
+          const s = searchTerm.toLowerCase();
+          return o.name?.toLowerCase().includes(s) || o.baseUrl?.toLowerCase().includes(s);
+        }).map((orch, i) => {
           const isConnected = orch.status === "connected";
           const testResult = testResults[orch.id];
           const isTesting = testingId === orch.id;

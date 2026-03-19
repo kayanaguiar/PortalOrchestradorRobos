@@ -5,6 +5,7 @@ export function usePolling(fetchFn, { interval = 30000, enabled = true } = {}) {
   const [data, setData] = useState(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
+  const [lastUpdated, setLastUpdated] = useState(null);
   const intervalRef = useRef(null);
 
   const refresh = useCallback(async () => {
@@ -12,6 +13,7 @@ export function usePolling(fetchFn, { interval = 30000, enabled = true } = {}) {
       const result = await fetchFn();
       setData(result);
       setError(null);
+      setLastUpdated(new Date());
     } catch (err) {
       setError(err.message);
     } finally {
@@ -27,7 +29,7 @@ export function usePolling(fetchFn, { interval = 30000, enabled = true } = {}) {
     return () => clearInterval(intervalRef.current);
   }, [refresh, interval, enabled]);
 
-  return { data, loading, error, refresh };
+  return { data, loading, error, refresh, lastUpdated };
 }
 
 export function useUiPathLogs(options = {}) {
@@ -65,10 +67,10 @@ export function useUiPathJobs(options = {}) {
   };
 }
 
-export function useUiPathProcesses() {
+export function useUiPathProcesses(interval = 60000) {
   const fetchFn = useCallback(() => fetchProcesses(), []);
   const { data, loading, error, refresh } = usePolling(fetchFn, {
-    interval: 60000,
+    interval,
   });
 
   return {
@@ -79,14 +81,15 @@ export function useUiPathProcesses() {
   };
 }
 
-export function useUiPathSessions() {
+export function useUiPathSessions(interval = 30000) {
   const fetchFn = useCallback(() => fetchSessions(), []);
   const { data, loading, error, refresh } = usePolling(fetchFn, {
-    interval: 30000,
+    interval,
   });
 
   return {
     sessions: data?.value || [],
+    recentlyOffline: data?.recentlyOffline || [],
     loading,
     error,
     refresh,
@@ -95,13 +98,15 @@ export function useUiPathSessions() {
 
 export function useUiPathHealth() {
   const fetchFn = useCallback(() => fetchHealth(), []);
-  const { data, loading, error } = usePolling(fetchFn, {
+  const { data, loading, error, refresh } = usePolling(fetchFn, {
     interval: 60000,
   });
 
   return {
     connected: data?.connected || false,
+    orchestratorStatuses: data?.orchestrators || [],
     loading,
     error,
+    refresh,
   };
 }

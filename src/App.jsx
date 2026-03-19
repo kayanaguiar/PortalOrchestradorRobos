@@ -1,4 +1,5 @@
 import { useState, useEffect, useCallback, useMemo } from "react";
+import { Routes, Route, useNavigate, useLocation } from "react-router-dom";
 import Sidebar from "./components/Sidebar";
 import Header from "./components/Header";
 import StatsPanel from "./components/StatsPanel";
@@ -8,13 +9,15 @@ import RobotsPage from "./components/pages/RobotsPage";
 import LogsPage from "./components/pages/LogsPage";
 import SettingsPage from "./components/pages/SettingsPage";
 import { useUiPathLogs, useUiPathJobs, useUiPathProcesses, useUiPathSessions, useUiPathHealth } from "./hooks/useUiPathData";
+import ConfirmModal from "./components/ConfirmModal";
+import Toast from "./components/Toast";
 import { startJob, stopJob, fetchSettings, fetchProcessVersions, updateProcessVersion } from "./services/api";
 
 const pageConfig = {
-  dashboard: { title: "Dashboard", subtitle: "VISÃO GERAL" },
-  robots: { title: "Robôs", subtitle: "GERENCIAMENTO E DETALHES" },
-  logs: { title: "Histórico de Jobs", subtitle: "EXECUÇÕES DE TODOS OS ROBÔS" },
-  settings: { title: "Configurações", subtitle: "ORCHESTRATORS E CONEXÕES" },
+  "/": { id: "dashboard", title: "Dashboard", subtitle: "VISÃO GERAL" },
+  "/robots": { id: "robots", title: "Robôs", subtitle: "GERENCIAMENTO E DETALHES" },
+  "/history": { id: "logs", title: "Histórico de Jobs", subtitle: "EXECUÇÕES DE TODOS OS ROBÔS" },
+  "/settings": { id: "settings", title: "Configurações", subtitle: "ORCHESTRATORS E CONEXÕES" },
 };
 
 function mapJobStatus(state) {
@@ -46,7 +49,7 @@ function apiJobsToRobots(jobs, logs, releases) {
       id: rel.Id,
       version: rel.ProcessVersion,
       latestVersion: rel._latestVersion,
-      hasUpdate: rel._hasUpdate === true,
+      hasUpdate: rel._hasUpdate === true && rel.AutoUpdate === false,
       orchestratorId: rel._orchestratorId,
     };
   }
@@ -135,18 +138,45 @@ function apiLogsToActivityFormat(logs) {
 }
 
 export default function App() {
-  const [activePage, setActivePage] = useState("dashboard");
+  const navigate = useNavigate();
+  const location = useLocation();
+  const page = pageConfig[location.pathname] || pageConfig["/"];
+  const activePage = page.id;
+
   const [actionLoading, setActionLoading] = useState(null);
   const [pollingInterval, setPollingInterval] = useState(30);
-  const [selectedRobotId, setSelectedRobotId] = useState(null);
+  const [sidebarCollapsed, setSidebarCollapsed] = useState(() => {
+    const saved = localStorage.getItem("sidebarCollapsed");
+    if (saved !== null) return saved === "true";
+    return window.matchMedia("(max-width: 1024px)").matches;
+  });
+
+  const toggleSidebar = useCallback(() => {
+    setSidebarCollapsed((c) => {
+      const next = !c;
+      localStorage.setItem("sidebarCollapsed", String(next));
+      return next;
+    });
+  }, []);
   const [logPageSize, setLogPageSize] = useState(5);
   const [searchTerm, setSearchTerm] = useState("");
   const [dismissedNotifications, setDismissedNotifications] = useState(new Set());
+  const [pendingAction, setPendingAction] = useState(null);
+  const [toasts, setToasts] = useState([]);
+
+  const addToast = useCallback((type, message) => {
+    const id = Date.now();
+    setToasts((prev) => [...prev, { id, type, message }]);
+    setTimeout(() => setToasts((prev) => prev.filter((t) => t.id !== id)), 4000);
+  }, []);
+
+  const removeToast = useCallback((id) => {
+    setToasts((prev) => prev.filter((t) => t.id !== id));
+  }, []);
 
   const handleRobotClick = useCallback((robotId) => {
-    setSelectedRobotId(robotId);
-    setActivePage("robots");
-  }, []);
+    navigate(`/robots?selected=${robotId}`);
+  }, [navigate]);
 
   // Carrega intervalo salvo no backend
   useEffect(() => {
@@ -157,14 +187,21 @@ export default function App() {
 
   const intervalMs = pollingInterval * 1000;
 
-  const { logs: apiLogs, loading: logsLoading, error: logsError, refresh: refreshLogs } = useUiPathLogs({ top: logPageSize, interval: intervalMs });
+  const { logs: apiLogs, loading: logsLoading, error: logsError, refresh: refreshLogs, lastUpdated: logsLastUpdated } = useUiPathLogs({ top: logPageSize, interval: intervalMs });
   const todayFilter = `CreationTime ge ${new Date().toISOString().split("T")[0]}T00:00:00Z`;
-  const { jobs: apiJobs, loading: jobsLoading, refresh: refreshJobs } = useUiPathJobs({ top: 200, filter: todayFilter, interval: intervalMs });
-  const { processes: apiReleases, loading: processesLoading, refresh: refreshProcesses } = useUiPathProcesses();
-  const { sessions: apiSessions, loading: sessionsLoading } = useUiPathSessions();
-  const { connected, loading: healthLoading } = useUiPathHealth();
+  const { jobs: apiJobs, loading: jobsLoading, refresh: refreshJobs, lastUpdated: jobsLastUpdated } = useUiPathJobs({ top: 200, filter: todayFilter, interval: intervalMs });
+  const { processes: apiReleases, loading: processesLoading, refresh: refreshProcesses } = useUiPathProcesses(intervalMs);
+  const { sessions: apiSessions, recentlyOffline, loading: sessionsLoading, refresh: refreshSessions } = useUiPathSessions(intervalMs);
+  const { connected, orchestratorStatuses, loading: healthLoading, refresh: refreshHealth } = useUiPathHealth();
 
-  const initialLoading = healthLoading || logsLoading || jobsLoading || processesLoading || sessionsLoading;
+  const lastUpdated = useMemo(() => {
+    const times = [logsLastUpdated, jobsLastUpdated].filter(Boolean);
+    return times.length ? new Date(Math.max(...times)) : null;
+  }, [logsLastUpdated, jobsLastUpdated]);
+
+  // Só espera o essencial: health + jobs + logs. O resto carrega em background.
+  const initialLoading = healthLoading || logsLoading || jobsLoading;
+  const dataReady = !initialLoading && connected;
 
   const robots = useMemo(
     () => apiJobsToRobots(apiJobs, apiLogs, apiReleases),
@@ -201,7 +238,7 @@ export default function App() {
     [activityLogs, search]
   );
 
-  const handleAction = useCallback(async (robotId, action) => {
+  const executeAction = useCallback(async (robotId, action) => {
     const robot = robots.find((r) => r.id === robotId);
     if (!robot?.orchestratorId) return;
 
@@ -213,12 +250,17 @@ export default function App() {
           if (robot.releaseKey) {
             await startJob(robot.orchestratorId, robot.releaseKey);
           } else {
-            console.error("Sem releaseKey para iniciar o job. Verifique /api/processes.");
+            console.error("Sem releaseKey para iniciar o job.");
           }
           break;
         case "stop":
           if (robot.jobId) {
-            await stopJob(robot.orchestratorId, robot.jobId);
+            await stopJob(robot.orchestratorId, robot.jobId, "SoftStop");
+          }
+          break;
+        case "kill":
+          if (robot.jobId) {
+            await stopJob(robot.orchestratorId, robot.jobId, "Kill");
           }
           break;
         case "update":
@@ -232,17 +274,59 @@ export default function App() {
           break;
       }
       await Promise.all([refreshJobs(), refreshLogs(), refreshProcesses()]);
+      const messages = {
+        start: `Job "${robot.name}" iniciado com sucesso`,
+        restart: `Job "${robot.name}" reiniciado com sucesso`,
+        stop: `Job "${robot.name}" parado com sucesso`,
+        kill: `Job "${robot.name}" encerrado`,
+        update: `"${robot.name}" atualizado para a última versão`,
+      };
+      addToast("success", messages[action] || "Ação executada com sucesso");
     } catch (err) {
-      console.error(`Erro ao executar ${action}:`, err);
+      const messages = {
+        start: "Erro ao iniciar",
+        restart: "Erro ao reiniciar",
+        stop: "Erro ao parar",
+        kill: "Erro ao encerrar",
+        update: "Erro ao atualizar versão",
+      };
+      addToast("error", `${messages[action] || "Erro"}: ${err.message}`);
     } finally {
       setActionLoading(null);
     }
-  }, [robots, refreshJobs, refreshLogs, refreshProcesses]);
+  }, [robots, refreshJobs, refreshLogs, refreshProcesses, addToast]);
+
+  const handleAction = useCallback((robotId, action) => {
+    const robot = robots.find((r) => r.id === robotId);
+    if (!robot) return;
+
+    // Ações perigosas pedem confirmação
+    if (action === "stop" || action === "kill" || action === "restart") {
+      setPendingAction({ robotId, action, robotName: robot.name });
+      return;
+    }
+
+    executeAction(robotId, action);
+  }, [robots, executeAction]);
+
+  const handleConfirmAction = useCallback(() => {
+    if (pendingAction) {
+      executeAction(pendingAction.robotId, pendingAction.action);
+      setPendingAction(null);
+    }
+  }, [pendingAction, executeAction]);
+
+  const handleCancelAction = useCallback(() => {
+    setPendingAction(null);
+  }, []);
 
   const refreshAll = useCallback(() => {
     refreshLogs();
     refreshJobs();
-  }, [refreshLogs, refreshJobs]);
+    refreshProcesses();
+    refreshSessions();
+    refreshHealth();
+  }, [refreshLogs, refreshJobs, refreshProcesses, refreshSessions, refreshHealth]);
 
   const now = new Date();
   const dateStr = now.toLocaleDateString("pt-BR", {
@@ -269,24 +353,34 @@ export default function App() {
       });
     }
 
-    // Assistants desconectados (só os que têm máquina identificável)
-    const disconnectedAssistants = apiSessions.filter(
-      (s) => s.Source === "Assistant" && s.State === "Disconnected" && s.HostMachineName
-    );
-    for (const session of disconnectedAssistants) {
-      const perfil = session.MachineName || session.HostMachineName;
+    // Assistants que ficaram offline (detectados pelo backend)
+    for (const assistant of recentlyOffline) {
+      const perfil = assistant.machineName || assistant.hostMachineName;
       items.push({
-        id: `assistant-${session.Id}`,
+        id: `assistant-offline-${assistant.id}`,
         type: "warning",
         title: `Assistant offline: ${perfil}`,
-        detail: `Perfil: ${perfil}`,
-        timestamp: session.ReportingTime,
+        detail: `Perfil: ${perfil} — saiu do ar`,
+        timestamp: new Date().toISOString(),
       });
+    }
+
+    // Orchestrators desconectados
+    for (const orch of orchestratorStatuses) {
+      if (!orch.connected) {
+        items.push({
+          id: `orch-${orch.id}`,
+          type: "error",
+          title: `Orchestrator desconectado: ${orch.name}`,
+          detail: orch.error || "Falha na conexão",
+          timestamp: new Date().toISOString(),
+        });
+      }
     }
 
     items.sort((a, b) => new Date(b.timestamp) - new Date(a.timestamp));
     return items;
-  }, [apiJobs, apiSessions]);
+  }, [apiJobs, recentlyOffline, orchestratorStatuses]);
 
   const notifications = useMemo(
     () => allNotifications.filter((n) => !dismissedNotifications.has(n.id)),
@@ -301,11 +395,10 @@ export default function App() {
     setDismissedNotifications(new Set(allNotifications.map((n) => n.id)));
   }, [allNotifications]);
 
-  const page = pageConfig[activePage];
   const subtitle = activePage === "dashboard" ? dateStr.toUpperCase() : page.subtitle;
 
-  // Tela de loading inicial
-  if (initialLoading) {
+  // Tela de loading inicial — espera todos os dados carregarem
+  if (!dataReady && !logsError) {
     return (
       <div className="min-h-screen hud-grid scanline flex items-center justify-center">
         <div className="text-center">
@@ -344,10 +437,7 @@ export default function App() {
             </svg>
           </div>
           <h1 className="font-display text-xl font-bold text-white mb-2">Sem Conexão</h1>
-          <p className="font-mono text-xs text-white/30 mb-4">Não foi possível conectar ao servidor.</p>
-          <p className="font-mono text-[11px] text-white/20 mb-6 bg-surface-800/60 rounded-lg p-3 border border-white/5">
-            cd server && python app.py
-          </p>
+          <p className="font-mono text-xs text-white/30 mb-6">Não foi possível conectar ao servidor.</p>
           <button
             onClick={refreshAll}
             className="px-4 py-2 rounded-lg bg-accent text-white text-sm font-medium hover:bg-accent-light transition-all cursor-pointer"
@@ -361,9 +451,12 @@ export default function App() {
 
   return (
     <div className="min-h-screen hud-grid scanline">
-      <Sidebar activePage={activePage} onNavigate={setActivePage} />
+      <Sidebar activePage={activePage} onNavigate={(id) => {
+        const routes = { dashboard: "/", robots: "/robots", logs: "/history", settings: "/settings" };
+        navigate(routes[id] || "/");
+      }} collapsed={sidebarCollapsed} onToggle={toggleSidebar} />
 
-      <main className="ml-64 p-8">
+      <main className={`p-8 transition-all duration-300 ${sidebarCollapsed ? "ml-16" : "ml-64"}`}>
         <Header
           title={page.title}
           subtitle={subtitle}
@@ -376,58 +469,84 @@ export default function App() {
           notifications={notifications}
           onDismissNotification={dismissNotification}
           onClearNotifications={clearAllNotifications}
+          lastUpdated={lastUpdated}
         />
 
-        {activePage === "dashboard" && (
-          <div className="space-y-6">
-            <StatsPanel robots={robots} jobs={apiJobs} sessions={apiSessions} />
-
-            <div>
-              <div className="flex items-center justify-between mb-4">
-                <h2 className="text-sm font-semibold text-white">
-                  Visão dos Robôs
-                </h2>
+        <Routes>
+          <Route path="/" element={
+            <div className="space-y-6">
+              <StatsPanel robots={robots} jobs={apiJobs} sessions={apiSessions} />
+              <div>
+                <div className="flex items-center justify-between mb-4">
+                  <h2 className="text-sm font-semibold text-white">Visão dos Robôs</h2>
+                </div>
+                <div className="grid grid-cols-1 lg:grid-cols-2 xl:grid-cols-3 gap-4">
+                  {filteredRobots.map((robot, i) => (
+                    <RobotCard
+                      key={robot.id}
+                      robot={robot}
+                      index={i}
+                      onAction={handleAction}
+                      onClick={() => handleRobotClick(robot.id)}
+                      loading={actionLoading === robot.id}
+                    />
+                  ))}
+                  {filteredRobots.length === 0 && !logsLoading && (
+                    <div className="col-span-full text-center py-12 text-white/20 text-sm font-mono">
+                      {search ? "Nenhum robô encontrado para essa busca." : "Nenhum job encontrado. Verifique as configurações dos Orchestrators."}
+                    </div>
+                  )}
+                </div>
               </div>
-              <div className="grid grid-cols-1 lg:grid-cols-2 xl:grid-cols-3 gap-4">
-                {filteredRobots.map((robot, i) => (
-                  <RobotCard
-                    key={robot.id}
-                    robot={robot}
-                    index={i}
-                    onAction={handleAction}
-                    onClick={() => handleRobotClick(robot.id)}
-                    loading={actionLoading === robot.id}
-                  />
-                ))}
-                {filteredRobots.length === 0 && !logsLoading && (
-                  <div className="col-span-full text-center py-12 text-white/20 text-sm font-mono">
-                    {search ? "Nenhum robô encontrado para essa busca." : "Nenhum job encontrado. Verifique as configurações dos Orchestrators."}
-                  </div>
-                )}
-              </div>
+              <ActivityTable logs={filteredLogs} pageSize={logPageSize} onPageSizeChange={setLogPageSize} />
             </div>
-
-            <ActivityTable logs={filteredLogs} pageSize={logPageSize} onPageSizeChange={setLogPageSize} />
-          </div>
-        )}
-
-        {activePage === "robots" && (
-          <RobotsPage
-            robots={robots}
-            onAction={handleAction}
-            initialSelectedId={selectedRobotId}
-            onClearSelection={() => setSelectedRobotId(null)}
-          />
-        )}
-
-        {activePage === "logs" && (
-          <LogsPage robots={robots} />
-        )}
-
-        {activePage === "settings" && (
-          <SettingsPage pollingInterval={pollingInterval} onPollingChange={setPollingInterval} />
-        )}
+          } />
+          <Route path="/robots" element={
+            <RobotsPage
+              robots={filteredRobots}
+              onAction={handleAction}
+              searchTerm={searchTerm}
+            />
+          } />
+          <Route path="/history" element={
+            <LogsPage robots={robots} searchTerm={searchTerm} />
+          } />
+          <Route path="/settings" element={
+            <SettingsPage pollingInterval={pollingInterval} onPollingChange={setPollingInterval} searchTerm={searchTerm} />
+          } />
+          <Route path="*" element={
+            <div className="text-center py-20 text-white/20 text-sm font-mono">
+              Página não encontrada
+            </div>
+          } />
+        </Routes>
       </main>
+
+      <ConfirmModal
+        open={!!pendingAction}
+        title={
+          pendingAction?.action === "kill" ? "Encerrar robô"
+          : pendingAction?.action === "stop" ? "Parar robô"
+          : "Reiniciar robô"
+        }
+        message={
+          pendingAction?.action === "kill"
+            ? `Tem certeza que deseja ENCERRAR o robô "${pendingAction?.robotName}"?\n\nO processo será interrompido imediatamente (Kill), sem esperar um ponto seguro. Dados em processamento podem ser perdidos.`
+            : pendingAction?.action === "stop"
+              ? `Tem certeza que deseja PARAR o robô "${pendingAction?.robotName}"?\n\nO robô será parado de forma segura (SoftStop), finalizando a atividade atual antes de encerrar.`
+              : `Tem certeza que deseja REINICIAR o robô "${pendingAction?.robotName}"?\n\nUm novo job será iniciado para este processo.`
+        }
+        confirmLabel={
+          pendingAction?.action === "kill" ? "Encerrar"
+          : pendingAction?.action === "stop" ? "Parar"
+          : "Reiniciar"
+        }
+        variant="danger"
+        onConfirm={handleConfirmAction}
+        onCancel={handleCancelAction}
+      />
+
+      <Toast toasts={toasts} onDismiss={removeToast} />
     </div>
   );
 }

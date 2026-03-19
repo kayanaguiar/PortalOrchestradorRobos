@@ -55,7 +55,7 @@ function formatDuration(start, end) {
   return `${h}:${m}:${s}`;
 }
 
-export default function LogsPage({ robots }) {
+export default function LogsPage({ robots, searchTerm: externalSearch }) {
   const [allJobs, setAllJobs] = useState([]);
   const [loading, setLoading] = useState(true);
   const [searchTerm, setSearchTerm] = useState("");
@@ -64,6 +64,11 @@ export default function LogsPage({ robots }) {
   const [dateFilter, setDateFilter] = useState(todayStr());
   const [currentPage, setCurrentPage] = useState(0);
   const [expandedJobId, setExpandedJobId] = useState(null);
+
+  // Sincroniza busca global
+  useEffect(() => {
+    if (externalSearch) setSearchTerm(externalSearch);
+  }, [externalSearch]);
   const [jobLogs, setJobLogs] = useState({});
   const [jobLogsLoading, setJobLogsLoading] = useState(null);
 

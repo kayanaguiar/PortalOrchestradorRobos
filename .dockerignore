@@ -1,0 +1,10 @@
+node_modules
+dist
+.env
+.git
+.claude
+.serena
+__pycache__
+*.pyc
+server/venv
+server/data

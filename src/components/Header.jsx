@@ -1,6 +1,6 @@
-import { useState, useRef, useEffect } from "react";
+import { useState, useRef, useEffect, useMemo } from "react";
 import { createPortal } from "react-dom";
-import { Search, Bell, RefreshCw, Wifi, WifiOff, Loader2, XCircle, AlertTriangle, X } from "lucide-react";
+import { Search, Bell, RefreshCw, Loader2, XCircle, AlertTriangle, X } from "lucide-react";
 import { motion } from "motion/react";
 
 function formatTimeAgo(ts) {
@@ -12,8 +12,24 @@ function formatTimeAgo(ts) {
   return `${Math.floor(diff / 86400)}d`;
 }
 
-export default function Header({ title, subtitle, connected, healthLoading, loading, onRefresh, searchTerm, onSearchChange, notifications = [], onDismissNotification, onClearNotifications }) {
+export default function Header({ title, subtitle, loading, onRefresh, searchTerm, onSearchChange, notifications = [], onDismissNotification, onClearNotifications, lastUpdated }) {
   const [showNotifications, setShowNotifications] = useState(false);
+  const [tick, setTick] = useState(0);
+
+  // Atualiza o "há Xs" a cada segundo
+  useEffect(() => {
+    const timer = setInterval(() => setTick((t) => t + 1), 1000);
+    return () => clearInterval(timer);
+  }, []);
+
+  const timeAgoLabel = useMemo(() => {
+    if (!lastUpdated) return null;
+    const diff = Math.floor((Date.now() - lastUpdated.getTime()) / 1000);
+    if (diff < 5) return "agora";
+    if (diff < 60) return `${diff}s`;
+    if (diff < 3600) return `${Math.floor(diff / 60)}min`;
+    return `${Math.floor(diff / 3600)}h`;
+  }, [lastUpdated, tick]);
   const bellRef = useRef(null);
   const panelRef = useRef(null);
   const [panelPos, setPanelPos] = useState({ top: 0, right: 0 });
@@ -106,24 +122,7 @@ export default function Header({ title, subtitle, connected, healthLoading, load
         <h1 className="text-2xl font-bold text-white tracking-tight">
           {title}
         </h1>
-        <div className="flex items-center gap-3 mt-1">
-          <p className="text-sm text-white/30 font-mono">{subtitle}</p>
-          {healthLoading ? (
-            <div className="flex items-center gap-1 px-2 py-0.5 rounded text-[9px] font-mono bg-accent/10 text-accent">
-              <Loader2 className="w-3 h-3 animate-spin" />
-              CONECTANDO...
-            </div>
-          ) : (
-            <div className={`flex items-center gap-1 px-2 py-0.5 rounded text-[9px] font-mono ${
-              connected
-                ? "bg-status-running/10 text-status-running"
-                : "bg-status-error/10 text-status-error"
-            }`}>
-              {connected ? <Wifi className="w-3 h-3" /> : <WifiOff className="w-3 h-3" />}
-              {connected ? "API CONECTADA" : "SEM CONEXÃO"}
-            </div>
-          )}
-        </div>
+        <p className="text-sm text-white/30 font-mono mt-1">{subtitle}</p>
       </div>
 
       <div className="flex items-center gap-3">
@@ -134,22 +133,27 @@ export default function Header({ title, subtitle, connected, healthLoading, load
             type="text"
             value={searchTerm}
             onChange={(e) => onSearchChange(e.target.value)}
-            placeholder="Buscar robô ou log..."
+            placeholder="Buscar no portal..."
             className="bg-surface-700/50 border border-white/5 rounded-lg pl-9 pr-4 py-2 text-sm text-white/70 placeholder:text-white/20 focus:outline-none focus:border-accent/30 focus:ring-1 focus:ring-accent/20 w-64 transition-all"
           />
         </div>
 
-        {/* Refresh */}
-        <button
-          onClick={onRefresh}
-          className="w-9 h-9 rounded-lg bg-surface-700/50 border border-white/5 flex items-center justify-center text-white/30 hover:text-white/60 hover:border-white/10 transition-all cursor-pointer"
-        >
-          {loading ? (
-            <Loader2 className="w-4 h-4 animate-spin" />
-          ) : (
-            <RefreshCw className="w-4 h-4" />
+        {/* Refresh + last updated */}
+        <div className="flex items-center gap-1.5">
+          {timeAgoLabel && (
+            <span className="font-mono text-[10px] text-white/20">{timeAgoLabel}</span>
           )}
-        </button>
+          <button
+            onClick={onRefresh}
+            className="w-9 h-9 rounded-lg bg-surface-700/50 border border-white/5 flex items-center justify-center text-white/30 hover:text-white/60 hover:border-white/10 transition-all cursor-pointer"
+          >
+            {loading ? (
+              <Loader2 className="w-4 h-4 animate-spin" />
+            ) : (
+              <RefreshCw className="w-4 h-4" />
+            )}
+          </button>
+        </div>
 
         {/* Notifications */}
         <button

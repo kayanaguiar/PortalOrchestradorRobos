@@ -1,0 +1,48 @@
+services:
+  # PostgreSQL
+  db:
+    image: postgres:17-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: robocommand
+      POSTGRES_USER: robocommand
+      POSTGRES_PASSWORD: ${DB_PASSWORD:-robocommand123}
+    ports:
+      - "5432:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U robocommand"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  # Backend FastAPI
+  backend:
+    build:
+      context: ./server
+    restart: unless-stopped
+    ports:
+      - "3001:3001"
+    environment:
+      DATABASE_URL: postgresql://robocommand:${DB_PASSWORD:-robocommand123}@db:5432/robocommand
+      UIPATH_TOKEN_URL: https://cloud.uipath.com/identity_/connect/token
+    volumes:
+      - ./server/data:/app/data
+    depends_on:
+      db:
+        condition: service_healthy
+
+  # Frontend Nginx
+  frontend:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    ports:
+      - "80:80"
+    depends_on:
+      - backend
+
+volumes:
+  pgdata:
