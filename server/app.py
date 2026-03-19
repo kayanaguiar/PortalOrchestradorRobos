@@ -58,6 +58,26 @@ async def uipath_post(orch: dict, endpoint: str, body: dict | None = None) -> di
         return response.json()
 
 
+async def uipath_patch(orch: dict, endpoint: str, body: dict | None = None) -> dict:
+    """Faz uma requisição PATCH autenticada a um orchestrator."""
+    token = await get_token(orch["id"], orch["clientId"], orch["clientSecret"])
+    async with httpx.AsyncClient() as client:
+        response = await client.patch(
+            f"{orch['baseUrl']}/{endpoint}",
+            json=body,
+            headers={
+                "Authorization": f"Bearer {token}",
+                "X-UIPATH-OrganizationUnitId": orch["folderId"],
+                "Content-Type": "application/json",
+            },
+        )
+        if response.status_code not in (200, 201, 202, 204):
+            raise HTTPException(status_code=response.status_code, detail=response.text)
+        if response.status_code == 204 or not response.content:
+            return {"status": "ok"}
+        return response.json()
+
+
 async def request_all_orchestrators(endpoint: str, params: dict | None = None) -> list:
     """Faz a mesma requisição em todos os orchestrators e combina os resultados."""
     orchestrators = load_orchestrators()
@@ -136,6 +156,22 @@ async def get_logs(
     return {"value": all_logs[:top], "@odata.count": len(all_logs)}
 
 
+@app.get("/api/logs/job/{job_key}")
+async def get_logs_by_job(job_key: str, process_name: str | None = Query(None)):
+    """Busca logs de um job específico. Filtra por ProcessName na API e por JobKey no servidor."""
+    params = {
+        "$top": 500,
+        "$orderby": "TimeStamp asc",
+    }
+    if process_name:
+        params["$filter"] = f"ProcessName eq '{process_name}'"
+
+    all_logs = await request_all_orchestrators("RobotLogs", params)
+    # Filtra pelo JobKey no servidor (campo não filtrável via OData)
+    filtered = [log for log in all_logs if log.get("JobKey") == job_key]
+    return {"value": filtered}
+
+
 # ─── Jobs ─────────────────────────────────────────────────
 
 @app.get("/api/jobs")
@@ -205,21 +241,72 @@ async def stop_job(req: JobActionRequest):
     return await uipath_post(orch, "Jobs/UiPath.Server.Configuration.OData.StopJobs", body)
 
 
-@app.post("/api/jobs/resume")
-async def resume_job(req: JobActionRequest):
-    """Retoma um job pausado."""
-    orch = _find_orchestrator(req.orchestratorId)
-    body = {"jobId": req.jobId}
-    return await uipath_post(orch, f"Jobs({req.jobId})/UiPath.Server.Configuration.OData.ResumeJob", body)
 
 
 # ─── Processes ────────────────────────────────────────────
 
 @app.get("/api/processes")
 async def get_processes():
-    """Busca processos de todos os orchestrators."""
+    """Busca processos de todos os orchestrators, com info de versão mais recente."""
     all_procs = await request_all_orchestrators("Releases", {"$orderby": "Name"})
+
+    # Para cada processo, busca a versão mais recente disponível
+    for proc in all_procs:
+        orch_id = proc.get("_orchestratorId")
+        process_key = proc.get("ProcessKey")
+        if orch_id and process_key:
+            try:
+                orch = _find_orchestrator(orch_id)
+                versions = await uipath_get(
+                    orch,
+                    f"Processes/UiPath.Server.Configuration.OData.GetProcessVersions(processId='{process_key}')",
+                    {"$orderby": "Version desc", "$top": 1},
+                )
+                latest = (versions.get("value") or [{}])[0]
+                proc["_latestVersion"] = latest.get("Version")
+                proc["_hasUpdate"] = proc.get("ProcessVersion") != latest.get("Version")
+            except Exception:
+                proc["_latestVersion"] = None
+                proc["_hasUpdate"] = False
+
     return {"value": all_procs}
+
+
+# ─── Process Version Update ───────────────────────────────
+
+@app.get("/api/processes/{process_id}/versions")
+async def get_process_versions(process_id: str, orchestrator_id: str = Query(...)):
+    """Busca versões disponíveis de um processo."""
+    orch = _find_orchestrator(orchestrator_id)
+    return await uipath_get(
+        orch,
+        f"Processes/UiPath.Server.Configuration.OData.GetProcessVersions(processId='{process_id}')",
+        {"$orderby": "Version desc", "$top": 10},
+    )
+
+
+class UpdateProcessVersionRequest(BaseModel):
+    orchestratorId: str
+    releaseName: str
+    packageVersion: str
+
+
+@app.post("/api/processes/update-version")
+async def update_process_version(req: UpdateProcessVersionRequest):
+    """Atualiza o processo para uma versão específica do pacote."""
+    orch = _find_orchestrator(req.orchestratorId)
+    # Busca o Release pelo nome pra pegar o Id correto
+    data = await uipath_get(orch, "Releases", {"$filter": f"Name eq '{req.releaseName}'"})
+    releases = data.get("value", [])
+    if not releases:
+        raise HTTPException(status_code=404, detail="Release não encontrado")
+    release = releases[0]
+    release_id = release["Id"]
+    print(f"[UPDATE] Release found: Id={release_id}, Name={release['Name']}, CurrentVersion={release.get('ProcessVersion')}, NewVersion={req.packageVersion}")
+    body = {"ProcessVersion": req.packageVersion}
+    result = await uipath_patch(orch, f"Releases({release_id})", body)
+    print(f"[UPDATE] Success via PATCH")
+    return result
 
 
 # ─── Machines ─────────────────────────────────────────────
@@ -229,6 +316,49 @@ async def get_machines():
     """Busca máquinas de todos os orchestrators."""
     all_machines = await request_all_orchestrators("Machines")
     return {"value": all_machines}
+
+
+# ─── Sessions (Robots conectados / Assistant) ────────────
+
+@app.get("/api/sessions")
+async def get_sessions():
+    """Busca sessões ativas de robôs (mostra quem está com Assistant conectado)."""
+    all_sessions = await request_all_orchestrators("Sessions")
+    return {"value": all_sessions}
+
+
+# ─── Settings ─────────────────────────────────────────────
+
+import json as _json
+
+SETTINGS_FILE = os.path.join(os.path.dirname(__file__), "data", "settings.json")
+
+
+def _load_settings() -> dict:
+    if not os.path.exists(SETTINGS_FILE):
+        return {"pollingInterval": 30}
+    with open(SETTINGS_FILE, "r", encoding="utf-8") as f:
+        return _json.load(f)
+
+
+def _save_settings(settings: dict):
+    with open(SETTINGS_FILE, "w", encoding="utf-8") as f:
+        _json.dump(settings, f, indent=2, ensure_ascii=False)
+
+
+@app.get("/api/settings")
+async def get_settings():
+    return _load_settings()
+
+
+class SettingsModel(BaseModel):
+    pollingInterval: int = 30
+
+
+@app.post("/api/settings")
+async def save_settings(settings: SettingsModel):
+    _save_settings(settings.model_dump())
+    return {"status": "ok"}
 
 
 # ─── Orchestrators CRUD ──────────────────────────────────

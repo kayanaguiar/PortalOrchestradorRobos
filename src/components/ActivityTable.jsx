@@ -1,3 +1,4 @@
+import { useState } from "react";
 import {
   CheckCircle2,
   AlertTriangle,
@@ -6,7 +7,6 @@ import {
 } from "lucide-react";
 import { motion } from "motion/react";
 
-// Mapeia Level do /odata/RobotLogs para ícone e cor
 const levelConfig = {
   Info: { icon: CheckCircle2, color: "text-status-running" },
   Error: { icon: XCircle, color: "text-status-error" },
@@ -14,6 +14,8 @@ const levelConfig = {
   Trace: { icon: CheckCircle2, color: "text-white/30" },
   Fatal: { icon: XCircle, color: "text-status-error" },
 };
+
+const PAGE_SIZES = [5, 25, 50, 100];
 
 function formatTime(timestamp) {
   const date = new Date(timestamp);
@@ -24,7 +26,7 @@ function formatTime(timestamp) {
   });
 }
 
-export default function ActivityTable({ logs }) {
+export default function ActivityTable({ logs, pageSize, onPageSizeChange }) {
   return (
     <motion.div
       initial={{ opacity: 0, y: 20 }}
@@ -33,14 +35,7 @@ export default function ActivityTable({ logs }) {
       className="rounded-xl border border-white/5 bg-surface-800/60 backdrop-blur-sm overflow-hidden"
     >
       <div className="px-5 py-4 border-b border-white/5 flex items-center justify-between">
-        <div>
-          <h2 className="text-sm font-semibold text-white">
-            Robot Logs
-          </h2>
-          <p className="text-[11px] text-white/30 mt-0.5 font-mono">
-            /odata/RobotLogs — ÚLTIMOS {logs.length} REGISTROS
-          </p>
-        </div>
+        <h2 className="text-sm font-semibold text-white">Robot Logs</h2>
         <div className="flex items-center gap-1.5 text-white/20">
           <Clock className="w-3.5 h-3.5" />
           <span className="font-mono text-[10px]">LIVE</span>
@@ -53,11 +48,8 @@ export default function ActivityTable({ logs }) {
           const cfg = levelConfig[log.Level] || levelConfig.Info;
           const Icon = cfg.icon;
           return (
-            <motion.div
-              key={log.Id}
-              initial={{ opacity: 0, x: -10 }}
-              animate={{ opacity: 1, x: 0 }}
-              transition={{ delay: 0.5 + i * 0.05, duration: 0.3 }}
+            <div
+              key={`${log.Id}-${i}`}
               className="px-5 py-3 flex items-center gap-4 hover:bg-white/[0.02] transition-colors"
             >
               <Icon className={`w-4 h-4 shrink-0 ${cfg.color}`} />
@@ -85,9 +77,32 @@ export default function ActivityTable({ logs }) {
               <span className="font-mono text-[11px] text-white/20 shrink-0">
                 {formatTime(log.Timestamp)}
               </span>
-            </motion.div>
+            </div>
           );
         })}
+      </div>
+
+      {/* Page size selector */}
+      <div className="px-5 py-3 border-t border-white/5 flex items-center justify-between">
+        <div className="flex items-center gap-2">
+          <span className="text-[10px] text-white/30 uppercase tracking-wider">Exibir</span>
+          {PAGE_SIZES.map((size) => (
+            <button
+              key={size}
+              onClick={() => onPageSizeChange(size)}
+              className={`px-2 py-0.5 rounded text-[11px] font-mono transition-all cursor-pointer ${
+                pageSize === size
+                  ? "bg-accent/15 text-accent border border-accent/30"
+                  : "text-white/30 border border-white/5 hover:text-white/60 hover:border-white/10"
+              }`}
+            >
+              {size}
+            </button>
+          ))}
+        </div>
+        <span className="text-[11px] text-white/30 font-mono">
+          {logs.length} registros
+        </span>
       </div>
     </motion.div>
   );

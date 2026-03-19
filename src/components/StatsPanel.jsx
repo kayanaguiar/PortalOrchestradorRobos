@@ -1,47 +1,63 @@
-import { Bot, Play, Pause, AlertTriangle } from "lucide-react";
+import { Bot, Zap, XCircle, Monitor, Server } from "lucide-react";
 import { motion } from "motion/react";
 
-const stats = [
-  {
-    label: "Total Robôs",
-    icon: Bot,
-    color: "text-accent",
-    bgColor: "bg-accent/10",
-    borderColor: "border-accent/20",
-    getValue: (robots) => robots.length,
-  },
-  {
-    label: "Ativos",
-    icon: Play,
-    color: "text-status-running",
-    bgColor: "bg-status-running/10",
-    borderColor: "border-status-running/20",
-    getValue: (robots) => robots.filter((r) => r.status === "running").length,
-  },
-  {
-    label: "Pausados",
-    icon: Pause,
-    color: "text-status-paused",
-    bgColor: "bg-status-paused/10",
-    borderColor: "border-status-paused/20",
-    getValue: (robots) => robots.filter((r) => r.status === "paused").length,
-  },
-  {
-    label: "Com Erro",
-    icon: AlertTriangle,
-    color: "text-status-error",
-    bgColor: "bg-status-error/10",
-    borderColor: "border-status-error/20",
-    getValue: (robots) => robots.filter((r) => r.status === "error").length,
-  },
-];
+export default function StatsPanel({ robots, jobs, sessions }) {
+  const totalJobs = jobs.length;
+  const faultedJobs = jobs.filter((j) => j.State === "Faulted").length;
+  const runningRobots = robots.filter((r) => r.status === "running").length;
+  const assistantSessions = sessions.filter(
+    (s) => s.State === "Available" && s.Source === "Assistant"
+  ).length;
 
-export default function StatsPanel({ robots }) {
+  const totalRobots = robots.length;
+
+  const stats = [
+    {
+      label: "Robôs",
+      value: totalRobots,
+      icon: Bot,
+      color: "text-white/70",
+      bgColor: "bg-white/5",
+      borderColor: "border-white/10",
+    },
+    {
+      label: "Assistants Ativos",
+      value: assistantSessions,
+      icon: Monitor,
+      color: "text-status-paused",
+      bgColor: "bg-status-paused/10",
+      borderColor: "border-status-paused/20",
+    },
+    {
+      label: "Jobs Hoje",
+      value: totalJobs,
+      icon: Zap,
+      color: "text-accent",
+      bgColor: "bg-accent/10",
+      borderColor: "border-accent/20",
+    },
+    {
+      label: "Executando",
+      value: runningRobots,
+      icon: Server,
+      color: "text-status-running",
+      bgColor: "bg-status-running/10",
+      borderColor: "border-status-running/20",
+    },
+    {
+      label: "Com Erro Hoje",
+      value: faultedJobs,
+      icon: XCircle,
+      color: "text-status-error",
+      bgColor: "bg-status-error/10",
+      borderColor: "border-status-error/20",
+    },
+  ];
+
   return (
-    <div className="grid grid-cols-4 gap-4">
+    <div className="grid grid-cols-5 gap-4">
       {stats.map((stat, i) => {
         const Icon = stat.icon;
-        const value = stat.getValue(robots);
         return (
           <motion.div
             key={stat.label}
@@ -56,7 +72,7 @@ export default function StatsPanel({ robots }) {
                   {stat.label}
                 </p>
                 <p className={`font-mono text-3xl font-bold ${stat.color}`}>
-                  {String(value).padStart(2, "0")}
+                  {String(stat.value).padStart(2, "0")}
                 </p>
               </div>
               <div
@@ -65,7 +81,6 @@ export default function StatsPanel({ robots }) {
                 <Icon className={`w-6 h-6 ${stat.color}`} />
               </div>
             </div>
-            {/* Decorative corner accent */}
             <div
               className={`absolute top-0 right-0 w-20 h-20 ${stat.bgColor} rounded-bl-full opacity-50`}
             />

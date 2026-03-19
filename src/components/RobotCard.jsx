@@ -1,6 +1,5 @@
 import {
   Play,
-  Pause,
   Square,
   RotateCcw,
   Monitor,
@@ -8,6 +7,7 @@ import {
   TrendingUp,
   Zap,
   Loader2,
+  ArrowUpCircle,
 } from "lucide-react";
 import { motion } from "motion/react";
 
@@ -18,13 +18,6 @@ const statusConfig = {
     bg: "bg-status-running",
     glow: "glow-running",
     dotClass: "pulse-running",
-  },
-  paused: {
-    label: "Pausado",
-    color: "text-status-paused",
-    bg: "bg-status-paused",
-    glow: "",
-    dotClass: "",
   },
   stopped: {
     label: "Parado",
@@ -42,19 +35,20 @@ const statusConfig = {
   },
 };
 
-export default function RobotCard({ robot, index, onAction, loading }) {
+export default function RobotCard({ robot, index, onAction, onClick, loading }) {
   const config = statusConfig[robot.status];
 
   return (
     <motion.div
       initial={{ opacity: 0, y: 30, scale: 0.95 }}
       animate={{ opacity: 1, y: 0, scale: 1 }}
+      onClick={onClick}
       transition={{
         delay: index * 0.08,
         duration: 0.5,
         ease: [0.25, 0.46, 0.45, 0.94],
       }}
-      className={`relative overflow-hidden rounded-xl border border-white/5 bg-surface-800/60 backdrop-blur-sm hover:border-white/10 transition-all duration-300 group ${config.glow}`}
+      className={`relative overflow-hidden rounded-xl border border-white/5 bg-surface-800/60 backdrop-blur-sm hover:border-white/10 hover:bg-surface-800/80 transition-all duration-300 cursor-pointer group ${config.glow}`}
     >
       {/* Status bar top accent */}
       <div className={`h-[2px] ${config.bg}`} />
@@ -80,11 +74,32 @@ export default function RobotCard({ robot, index, onAction, loading }) {
               {robot.orchestrator}
             </p>
           </div>
-          <div className="font-mono text-[11px] text-white/20 flex items-center gap-1">
-            <Monitor className="w-3 h-3" />
-            {robot.machine}
+          <div className="flex flex-col items-end gap-1">
+            <div className="font-mono text-[11px] text-white/20 flex items-center gap-1">
+              <Monitor className="w-3 h-3" />
+              {robot.machine}
+            </div>
+            {robot.processVersion && (
+              <span className="font-mono text-[10px] text-white/15">v{robot.processVersion}</span>
+            )}
           </div>
         </div>
+
+        {/* Update available badge */}
+        {robot.hasUpdate && (
+          <div className="mb-3 px-3 py-2 rounded-lg bg-accent/10 border border-accent/20 flex items-center justify-between">
+            <div className="flex items-center gap-2">
+              <ArrowUpCircle className="w-4 h-4 text-accent" />
+              <span className="text-[11px] font-medium text-accent">Atualização disponível</span>
+            </div>
+            <button
+              onClick={(e) => { e.stopPropagation(); onAction(robot.id, "update"); }}
+              className="px-2.5 py-1 rounded-md bg-accent/20 text-accent text-[10px] font-mono font-medium hover:bg-accent/30 transition-all cursor-pointer"
+            >
+              ATUALIZAR
+            </button>
+          </div>
+        )}
 
         {/* Last log from UiPath /odata/RobotLogs */}
         <div className="mb-4 p-3 rounded-lg bg-surface-900/60 border border-white/5">
@@ -168,36 +183,12 @@ export default function RobotCard({ robot, index, onAction, loading }) {
             </div>
           )}
           {!loading && robot.status === "running" && (
-            <>
-              <ActionButton
-                icon={Pause}
-                label="Pausar"
-                onClick={() => onAction(robot.id, "pause")}
-                variant="warning"
-              />
-              <ActionButton
-                icon={Square}
-                label="Parar"
-                onClick={() => onAction(robot.id, "stop")}
-                variant="danger"
-              />
-            </>
-          )}
-          {!loading && robot.status === "paused" && (
-            <>
-              <ActionButton
-                icon={Play}
-                label="Retomar"
-                onClick={() => onAction(robot.id, "resume")}
-                variant="success"
-              />
-              <ActionButton
-                icon={Square}
-                label="Parar"
-                onClick={() => onAction(robot.id, "stop")}
-                variant="danger"
-              />
-            </>
+            <ActionButton
+              icon={Square}
+              label="Parar"
+              onClick={() => onAction(robot.id, "stop")}
+              variant="danger"
+            />
           )}
           {!loading && robot.status === "stopped" && (
             <ActionButton
@@ -241,7 +232,7 @@ const variantStyles = {
 function ActionButton({ icon: Icon, label, onClick, variant }) {
   return (
     <button
-      onClick={onClick}
+      onClick={(e) => { e.stopPropagation(); onClick(); }}
       className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg border text-xs font-medium transition-all duration-200 cursor-pointer ${variantStyles[variant]}`}
     >
       <Icon className="w-3.5 h-3.5" />

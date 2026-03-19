@@ -11,7 +11,7 @@ import { motion } from "motion/react";
 const navItems = [
   { icon: LayoutDashboard, label: "Dashboard", id: "dashboard" },
   { icon: Bot, label: "Robôs", id: "robots" },
-  { icon: ScrollText, label: "Logs", id: "logs" },
+  { icon: ScrollText, label: "Histórico", id: "logs" },
   { icon: Settings, label: "Configurações", id: "settings" },
 ];
 

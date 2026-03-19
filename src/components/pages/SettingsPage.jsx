@@ -14,7 +14,7 @@ import {
   EyeOff,
 } from "lucide-react";
 import { motion } from "motion/react";
-import { fetchOrchestrators, saveOrchestrators, testOrchestrator } from "../../services/api";
+import { fetchOrchestrators, saveOrchestrators, testOrchestrator, saveSettings } from "../../services/api";
 
 function formatTime(ts) {
   return new Date(ts).toLocaleTimeString("pt-BR", {
@@ -24,9 +24,9 @@ function formatTime(ts) {
   });
 }
 
-export default function SettingsPage() {
+export default function SettingsPage({ pollingInterval, onPollingChange }) {
   const [orchestrators, setOrchestrators] = useState([]);
-  const [pollingInterval, setPollingInterval] = useState(30);
+  const [localInterval, setLocalInterval] = useState(pollingInterval);
   const [saving, setSaving] = useState(false);
   const [saveStatus, setSaveStatus] = useState(null);
   const [testResults, setTestResults] = useState({});
@@ -74,7 +74,11 @@ export default function SettingsPage() {
     setSaving(true);
     setSaveStatus(null);
     try {
-      await saveOrchestrators(orchestrators);
+      await Promise.all([
+        saveOrchestrators(orchestrators),
+        saveSettings({ pollingInterval: localInterval }),
+      ]);
+      onPollingChange(localInterval);
       setSaveStatus("ok");
     } catch {
       setSaveStatus("error");
@@ -128,14 +132,14 @@ export default function SettingsPage() {
             <Clock className="w-4 h-4 text-white/20" />
             <input
               type="number"
-              value={pollingInterval}
-              onChange={(e) => setPollingInterval(Number(e.target.value))}
+              value={localInterval}
+              onChange={(e) => setLocalInterval(Number(e.target.value))}
               min={5}
               max={300}
               className="bg-surface-700/50 border border-white/5 rounded-lg px-3 py-2 text-sm text-white/70 font-mono w-24 focus:outline-none focus:border-accent/30 focus:ring-1 focus:ring-accent/20"
             />
             <span className="text-xs text-white/30">
-              Polling a cada {pollingInterval}s nos Orchestrators
+              Polling a cada {localInterval}s nos Orchestrators
             </span>
           </div>
         </div>

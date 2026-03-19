@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback, useRef } from "react";
-import { fetchLogs, fetchJobs, fetchProcesses, fetchHealth } from "../services/api";
+import { fetchLogs, fetchJobs, fetchProcesses, fetchSessions, fetchHealth } from "../services/api";
 
 export function usePolling(fetchFn, { interval = 30000, enabled = true } = {}) {
   const [data, setData] = useState(null);
@@ -68,11 +68,25 @@ export function useUiPathJobs(options = {}) {
 export function useUiPathProcesses() {
   const fetchFn = useCallback(() => fetchProcesses(), []);
   const { data, loading, error, refresh } = usePolling(fetchFn, {
-    interval: 60000, // processos mudam menos, polling mais lento
+    interval: 60000,
   });
 
   return {
     processes: data?.value || [],
+    loading,
+    error,
+    refresh,
+  };
+}
+
+export function useUiPathSessions() {
+  const fetchFn = useCallback(() => fetchSessions(), []);
+  const { data, loading, error, refresh } = usePolling(fetchFn, {
+    interval: 30000,
+  });
+
+  return {
+    sessions: data?.value || [],
     loading,
     error,
     refresh,

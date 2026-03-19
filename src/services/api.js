@@ -48,6 +48,12 @@ export async function fetchJobs({ top = 100, filter } = {}) {
   });
 }
 
+export async function fetchLogsByJob(jobKey, processName) {
+  const params = {};
+  if (processName) params.process_name = processName;
+  return request(`${API_BASE}/logs/job/${jobKey}`, params);
+}
+
 // ─── Job Actions ────────────────────────────────
 
 export async function startJob(orchestratorId, releaseKey) {
@@ -62,10 +68,38 @@ export async function resumeJob(orchestratorId, jobId) {
   return postRequest("/jobs/resume", { orchestratorId, jobId });
 }
 
+// ─── Process Versions ────────────────────────────
+
+export async function fetchProcessVersions(processId, orchestratorId) {
+  return request(`${API_BASE}/processes/${encodeURIComponent(processId)}/versions`, {
+    orchestrator_id: orchestratorId,
+  });
+}
+
+export async function updateProcessVersion(orchestratorId, releaseName, packageVersion) {
+  return postRequest("/processes/update-version", { orchestratorId, releaseName, packageVersion });
+}
+
 // ─── Processes ───────────────────────────────────
 
 export async function fetchProcesses() {
   return request(`${API_BASE}/processes`);
+}
+
+// ─── Sessions ────────────────────────────────────
+
+export async function fetchSessions() {
+  return request(`${API_BASE}/sessions`);
+}
+
+// ─── Settings ────────────────────────────────────
+
+export async function fetchSettings() {
+  return request(`${API_BASE}/settings`);
+}
+
+export async function saveSettings(settings) {
+  return postRequest("/settings", settings);
 }
 
 // ─── Health ──────────────────────────────────────

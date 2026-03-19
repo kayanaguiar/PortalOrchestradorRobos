@@ -2,10 +2,15 @@ import time
 import os
 import httpx
 
-SCOPES = "OR.Robots.Read OR.Jobs.Read OR.Jobs.Write OR.Folders.Read OR.Audit.Read OR.Execution.Read OR.Monitoring.Read"
+SCOPES = "OR.Robots.Read OR.Jobs.Read OR.Jobs.Write OR.Folders.Read OR.Audit.Read OR.Execution.Read OR.Execution.Write OR.Monitoring.Read OR.Administration.Write"
 
 # Cache de tokens por orchestrator_id
 _token_cache: dict[str, dict] = {}
+
+
+def clear_token_cache():
+    """Limpa o cache de tokens, forçando renovação no próximo request."""
+    _token_cache.clear()
 
 
 async def get_token(orchestrator_id: str, client_id: str, client_secret: str) -> str:
