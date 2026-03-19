@@ -97,6 +97,16 @@ export async function fetchSessions() {
   return request(`${API_BASE}/sessions`);
 }
 
+// ─── Archived Processes ──────────────────────────
+
+export async function fetchArchivedProcesses() {
+  return request(`${API_BASE}/archived-processes`);
+}
+
+export async function toggleArchivedProcess(processKey) {
+  return postRequest("/archived-processes/toggle", { processKey });
+}
+
 // ─── Settings ────────────────────────────────────
 
 export async function fetchSettings() {

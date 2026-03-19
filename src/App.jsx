@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback, useMemo } from "react";
+import { useState, useEffect, useCallback, useMemo, useRef } from "react";
 import { Routes, Route, useNavigate, useLocation } from "react-router-dom";
 import Sidebar from "./components/Sidebar";
 import Header from "./components/Header";
@@ -11,7 +11,7 @@ import SettingsPage from "./components/pages/SettingsPage";
 import { useUiPathLogs, useUiPathJobs, useUiPathProcesses, useUiPathSessions, useUiPathHealth } from "./hooks/useUiPathData";
 import ConfirmModal from "./components/ConfirmModal";
 import Toast from "./components/Toast";
-import { startJob, stopJob, fetchSettings, fetchProcessVersions, updateProcessVersion, fetchProcessUpdates } from "./services/api";
+import { startJob, stopJob, fetchSettings, fetchProcessVersions, updateProcessVersion, fetchProcessUpdates, fetchArchivedProcesses, toggleArchivedProcess } from "./services/api";
 
 const pageConfig = {
   "/": { id: "dashboard", title: "Dashboard", subtitle: "VISÃO GERAL" },
@@ -32,7 +32,8 @@ function mapJobStatus(state) {
   }
 }
 
-function apiJobsToRobots(jobs, logs, releases, updates = {}) {
+function buildRobots(releases, jobs, logs, updates = {}) {
+  // Logs mais recentes por processo
   const latestLogByProcess = {};
   for (const log of logs) {
     const name = log.ProcessName;
@@ -41,20 +42,7 @@ function apiJobsToRobots(jobs, logs, releases, updates = {}) {
     }
   }
 
-  // Map ReleaseName -> Release info (do /odata/Releases)
-  const releaseInfoByName = {};
-  for (const rel of releases) {
-    releaseInfoByName[rel.Name] = {
-      key: rel.Key,
-      id: rel.Id,
-      version: rel.ProcessVersion,
-      latestVersion: updates[rel.Name]?.latestVersion || null,
-      hasUpdate: updates[rel.Name]?.hasUpdate === true,
-      orchestratorId: rel._orchestratorId,
-    };
-  }
-
-  // Conta execuções de hoje e taxa de sucesso por processo
+  // Execuções de hoje por processo
   const today = new Date().toISOString().split("T")[0];
   const statsByProcess = {};
   for (const job of jobs) {
@@ -64,55 +52,73 @@ function apiJobsToRobots(jobs, logs, releases, updates = {}) {
     }
     if (job.CreationTime && job.CreationTime.startsWith(today)) {
       statsByProcess[name].total++;
-      if (job.State === "Successful") {
-        statsByProcess[name].successful++;
-      }
+      if (job.State === "Successful") statsByProcess[name].successful++;
     }
   }
 
-  // Agrupa jobs por processo, pega o mais recente
+  // Job mais recente por processo
   const latestJobByProcess = {};
   for (const job of jobs) {
-    const key = `${job._orchestratorId}::${job.ReleaseName || job.Id}`;
+    const key = `${job._orchestratorId}::${job.ReleaseName}`;
     const existing = latestJobByProcess[key];
     if (!existing || new Date(job.CreationTime) > new Date(existing.CreationTime)) {
       latestJobByProcess[key] = job;
     }
   }
 
-  return Object.values(latestJobByProcess).map((job) => {
-    const latestLog = latestLogByProcess[job.ReleaseName] || null;
-    const stats = statsByProcess[job.ReleaseName] || { total: 0, successful: 0 };
+  // Itera sobre RELEASES (processos), não jobs
+  return releases.map((rel) => {
+    const processKey = `${rel._orchestratorId}::${rel.Name}`;
+    const job = latestJobByProcess[processKey] || null;
+    const latestLog = latestLogByProcess[rel.Name] || null;
+    const stats = statsByProcess[rel.Name] || { total: 0, successful: 0 };
     const successRate = stats.total > 0
       ? Math.round((stats.successful / stats.total) * 100 * 10) / 10
       : 0;
+    const updateInfo = updates[rel.Name] || {};
 
-    const releaseInfo = releaseInfoByName[job.ReleaseName] || {};
+    let status, state, lastLog, runtime, machine;
+    if (job) {
+      status = mapJobStatus(job.State);
+      state = job.State;
+      lastLog = latestLog
+        ? { Level: latestLog.Level, Message: latestLog.Message, Timestamp: latestLog.TimeStamp }
+        : { Level: "Info", Message: job.Info || "—", Timestamp: job.CreationTime };
+      runtime = job.StartTime
+        ? formatRuntime(new Date(job.StartTime), job.EndTime ? new Date(job.EndTime) : new Date())
+        : "00:00:00";
+      machine = job.HostMachineName || "—";
+    } else {
+      status = "inactive";
+      state = null;
+      lastLog = latestLog
+        ? { Level: latestLog.Level, Message: latestLog.Message, Timestamp: latestLog.TimeStamp }
+        : null;
+      runtime = "—";
+      machine = "—";
+    }
 
     return {
-      id: `job-${job.Id}`,
-      jobId: job.Id,
-      releaseKey: releaseInfo.key || null,
-      releaseId: releaseInfo.id || null,
-      processVersion: releaseInfo.version || null,
-      latestVersion: releaseInfo.latestVersion || null,
-      hasUpdate: releaseInfo.hasUpdate || false,
-      orchestratorId: job._orchestratorId,
-      name: job.ReleaseName || `Job ${job.Id}`,
-      orchestrator: job._orchestratorName || "UiPath Cloud",
-      processKey: job.Key,
-      status: mapJobStatus(job.State),
-      state: job.State,
-      lastLog: latestLog
-        ? { Level: latestLog.Level, Message: latestLog.Message, Timestamp: latestLog.TimeStamp }
-        : { Level: "Info", Message: job.Info || "—", Timestamp: job.CreationTime },
-      runtime: job.StartTime
-        ? formatRuntime(new Date(job.StartTime), job.EndTime ? new Date(job.EndTime) : new Date())
-        : "00:00:00",
-      startedAt: job.StartTime,
+      id: `rel-${rel._orchestratorId}-${rel.Id}`,
+      jobId: job?.Id || null,
+      releaseKey: rel.Key,
+      releaseId: rel.Id,
+      processVersion: rel.ProcessVersion,
+      latestVersion: updateInfo.latestVersion || null,
+      hasUpdate: updateInfo.hasUpdate === true,
+      orchestratorId: rel._orchestratorId,
+      orchestratorName: rel._orchestratorName,
+      name: rel.Name,
+      orchestrator: rel._orchestratorName || "UiPath Cloud",
+      processKey: `${rel._orchestratorId}::${rel.Name}`,
+      status,
+      state,
+      lastLog,
+      runtime,
+      startedAt: job?.StartTime || null,
       executionsToday: stats.total,
       successRate,
-      machine: job.HostMachineName || "—",
+      machine,
     };
   });
 }
@@ -161,6 +167,14 @@ export default function App() {
   const [logPageSize, setLogPageSize] = useState(5);
   const [searchTerm, setSearchTerm] = useState("");
   const [dismissedNotifications, setDismissedNotifications] = useState(new Set());
+  const [archivedProcesses, setArchivedProcesses] = useState(new Set());
+
+  // Carrega processos arquivados
+  useEffect(() => {
+    fetchArchivedProcesses()
+      .then((data) => setArchivedProcesses(new Set(data.value || [])))
+      .catch(() => {});
+  }, []);
   const [pendingAction, setPendingAction] = useState(null);
   const [toasts, setToasts] = useState([]);
 
@@ -194,10 +208,11 @@ export default function App() {
   const { sessions: apiSessions, recentlyOffline, loading: sessionsLoading, refresh: refreshSessions } = useUiPathSessions(intervalMs);
   const { connected, orchestratorStatuses, loading: healthLoading, refresh: refreshHealth } = useUiPathHealth();
 
-  // Updates de versão em background (não bloqueia nada)
+  // Updates de versão em background (roda só uma vez quando conecta)
   const [processUpdates, setProcessUpdates] = useState({});
+  const [updatesLoaded, setUpdatesLoaded] = useState(false);
   useEffect(() => {
-    if (!connected) return;
+    if (!connected || updatesLoaded) return;
     fetchProcessUpdates()
       .then((data) => {
         const map = {};
@@ -205,9 +220,10 @@ export default function App() {
           map[item.name] = item;
         }
         setProcessUpdates(map);
+        setUpdatesLoaded(true);
       })
       .catch(() => {});
-  }, [connected, apiReleases]);
+  }, [connected, updatesLoaded]);
 
   const lastUpdated = useMemo(() => {
     const times = [logsLastUpdated, jobsLastUpdated].filter(Boolean);
@@ -216,10 +232,14 @@ export default function App() {
 
   // Só espera o essencial: health + jobs + logs. O resto carrega em background.
   const initialLoading = healthLoading || logsLoading || jobsLoading;
-  const dataReady = !initialLoading && connected;
+  const [hasLoadedOnce, setHasLoadedOnce] = useState(false);
+  useEffect(() => {
+    if (!initialLoading && connected) setHasLoadedOnce(true);
+  }, [initialLoading, connected]);
+  const dataReady = hasLoadedOnce;
 
   const robots = useMemo(
-    () => apiJobsToRobots(apiJobs, apiLogs, apiReleases, processUpdates),
+    () => buildRobots(apiReleases, apiJobs, apiLogs, processUpdates),
     [apiJobs, apiLogs, apiReleases, processUpdates]
   );
 
@@ -230,16 +250,22 @@ export default function App() {
 
   const search = searchTerm.toLowerCase().trim();
 
+  // Filtra arquivados e busca
+  const visibleRobots = useMemo(
+    () => robots.filter((r) => !archivedProcesses.has(r.processKey)),
+    [robots, archivedProcesses]
+  );
+
   const filteredRobots = useMemo(
     () => search
-      ? robots.filter((r) =>
+      ? visibleRobots.filter((r) =>
           r.name.toLowerCase().includes(search) ||
           r.machine.toLowerCase().includes(search) ||
           r.orchestrator.toLowerCase().includes(search) ||
           r.lastLog?.Message?.toLowerCase().includes(search)
         )
-      : robots,
-    [robots, search]
+      : visibleRobots,
+    [visibleRobots, search]
   );
 
   const filteredLogs = useMemo(
@@ -310,6 +336,27 @@ export default function App() {
       setActionLoading(null);
     }
   }, [robots, refreshJobs, refreshLogs, refreshProcesses, addToast]);
+
+  const archivedRef = useRef(archivedProcesses);
+  archivedRef.current = archivedProcesses;
+
+  const handleArchive = useCallback((processKey) => {
+    const wasArchived = archivedRef.current.has(processKey);
+    const next = new Set(archivedRef.current);
+    if (wasArchived) next.delete(processKey);
+    else next.add(processKey);
+    setArchivedProcesses(next);
+    addToast("success", wasArchived ? "Processo restaurado" : "Processo arquivado");
+
+    toggleArchivedProcess(processKey).catch(() => {
+      // Reverte
+      const reverted = new Set(archivedRef.current);
+      if (wasArchived) reverted.add(processKey);
+      else reverted.delete(processKey);
+      setArchivedProcesses(reverted);
+      addToast("error", "Erro ao sincronizar");
+    });
+  }, [addToast]);
 
   const handleAction = useCallback((robotId, action) => {
     const robot = robots.find((r) => r.id === robotId);
@@ -490,7 +537,7 @@ export default function App() {
         <Routes>
           <Route path="/" element={
             <div className="space-y-6">
-              <StatsPanel robots={robots} jobs={apiJobs} sessions={apiSessions} />
+              <StatsPanel robots={visibleRobots} jobs={apiJobs} sessions={apiSessions} />
               <div>
                 <div className="flex items-center justify-between mb-4">
                   <h2 className="text-sm font-semibold text-white">Visão dos Robôs</h2>
@@ -502,6 +549,7 @@ export default function App() {
                       robot={robot}
                       index={i}
                       onAction={handleAction}
+                      onArchive={handleArchive}
                       onClick={() => handleRobotClick(robot.id)}
                       loading={actionLoading === robot.id}
                     />
@@ -527,7 +575,14 @@ export default function App() {
             <LogsPage robots={robots} searchTerm={searchTerm} />
           } />
           <Route path="/settings" element={
-            <SettingsPage pollingInterval={pollingInterval} onPollingChange={setPollingInterval} searchTerm={searchTerm} />
+            <SettingsPage
+              pollingInterval={pollingInterval}
+              onPollingChange={setPollingInterval}
+              searchTerm={searchTerm}
+              archivedProcesses={archivedProcesses}
+              allRobots={robots}
+              onUnarchive={handleArchive}
+            />
           } />
           <Route path="*" element={
             <div className="text-center py-20 text-white/20 text-sm font-mono">

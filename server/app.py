@@ -435,6 +435,43 @@ async def get_sessions():
     return result
 
 
+# ─── Archived Processes ───────────────────────────────────
+
+ARCHIVED_FILE = os.path.join(os.path.dirname(__file__), "data", "archived_processes.json")
+
+
+def _load_archived() -> list[str]:
+    if not os.path.exists(ARCHIVED_FILE):
+        return []
+    with open(ARCHIVED_FILE, "r", encoding="utf-8") as f:
+        return _json.load(f)
+
+
+def _save_archived(archived: list[str]):
+    with open(ARCHIVED_FILE, "w", encoding="utf-8") as f:
+        _json.dump(archived, f, indent=2, ensure_ascii=False)
+
+
+@app.get("/api/archived-processes")
+async def get_archived_processes():
+    return {"value": _load_archived()}
+
+
+class ToggleArchiveRequest(BaseModel):
+    processKey: str
+
+
+@app.post("/api/archived-processes/toggle")
+async def toggle_archived_process(req: ToggleArchiveRequest):
+    archived = _load_archived()
+    if req.processKey in archived:
+        archived.remove(req.processKey)
+    else:
+        archived.append(req.processKey)
+    _save_archived(archived)
+    return {"value": archived}
+
+
 # ─── Settings ─────────────────────────────────────────────
 
 import json as _json

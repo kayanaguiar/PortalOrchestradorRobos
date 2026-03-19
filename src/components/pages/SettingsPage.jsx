@@ -1,8 +1,9 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useMemo } from "react";
 import {
   Wifi,
   WifiOff,
   Plus,
+  ArchiveRestore,
   Trash2,
   Save,
   RefreshCw,
@@ -24,7 +25,7 @@ function formatTime(ts) {
   });
 }
 
-export default function SettingsPage({ pollingInterval, onPollingChange, searchTerm = "" }) {
+export default function SettingsPage({ pollingInterval, onPollingChange, searchTerm = "", archivedProcesses = new Set(), allRobots = [], onUnarchive }) {
   const [orchestrators, setOrchestrators] = useState([]);
   const [localInterval, setLocalInterval] = useState(pollingInterval);
   const [saving, setSaving] = useState(false);
@@ -320,6 +321,40 @@ export default function SettingsPage({ pollingInterval, onPollingChange, searchT
           );
         })}
       </div>
+
+      {/* Archived processes */}
+      {archivedProcesses.size > 0 && (
+        <>
+          <div>
+            <h2 className="text-sm font-semibold text-white">Processos Arquivados</h2>
+            <p className="text-[11px] text-white/30 mt-0.5 font-mono">
+              {archivedProcesses.size} ARQUIVADOS — CLIQUE PARA RESTAURAR
+            </p>
+          </div>
+          <div className="rounded-xl border border-white/5 bg-surface-800/60 overflow-hidden divide-y divide-white/[0.03]">
+            {Array.from(archivedProcesses).map((key) => {
+              const robot = allRobots.find((r) => r.processKey === key);
+              const name = robot?.name || key.split("::")[1] || key;
+              const orchestrator = robot?.orchestrator || key.split("::")[0] || "—";
+              return (
+                <div key={key} className="px-5 py-3 flex items-center justify-between hover:bg-white/[0.02] transition-colors">
+                  <div>
+                    <span className="text-sm text-white/70">{name}</span>
+                    <p className="text-[11px] text-white/25 font-mono">{orchestrator}</p>
+                  </div>
+                  <button
+                    onClick={() => onUnarchive?.(key)}
+                    className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-accent/30 text-accent text-xs font-medium hover:bg-accent/10 transition-all cursor-pointer"
+                  >
+                    <ArchiveRestore className="w-3.5 h-3.5" />
+                    Restaurar
+                  </button>
+                </div>
+              );
+            })}
+          </div>
+        </>
+      )}
 
       {/* Save button */}
       <div className="flex items-center justify-end gap-3">

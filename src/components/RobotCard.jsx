@@ -9,6 +9,7 @@ import {
   Zap,
   Loader2,
   ArrowUpCircle,
+  Archive,
 } from "lucide-react";
 import { motion } from "motion/react";
 
@@ -34,19 +35,25 @@ const statusConfig = {
     glow: "glow-error",
     dotClass: "pulse-running",
   },
+  inactive: {
+    label: "Inativo",
+    color: "text-white/30",
+    bg: "bg-white/20",
+    glow: "",
+    dotClass: "",
+  },
 };
 
-export default function RobotCard({ robot, index, onAction, onClick, loading }) {
-  const config = statusConfig[robot.status];
+export default function RobotCard({ robot, index, onAction, onArchive, onClick, loading }) {
+  const config = statusConfig[robot.status] || statusConfig.inactive;
 
   return (
     <motion.div
-      initial={{ opacity: 0, y: 30, scale: 0.95 }}
+      initial={false}
       animate={{ opacity: 1, y: 0, scale: 1 }}
       onClick={onClick}
       transition={{
-        delay: index * 0.08,
-        duration: 0.5,
+        duration: 0.3,
         ease: [0.25, 0.46, 0.45, 0.94],
       }}
       className={`relative overflow-hidden rounded-xl border border-white/5 bg-surface-800/60 backdrop-blur-sm hover:border-white/10 hover:bg-surface-800/80 transition-all duration-300 cursor-pointer group ${config.glow}`}
@@ -207,6 +214,14 @@ export default function RobotCard({ robot, index, onAction, onClick, loading }) 
               variant="success"
             />
           )}
+          {!loading && robot.status === "inactive" && (
+            <ActionButton
+              icon={Play}
+              label="Iniciar"
+              onClick={() => onAction(robot.id, "start")}
+              variant="success"
+            />
+          )}
           {!loading && robot.status === "error" && (
             <>
               <ActionButton
@@ -223,6 +238,14 @@ export default function RobotCard({ robot, index, onAction, onClick, loading }) 
               />
             </>
           )}
+          {!loading && onArchive && (
+            <ActionButton
+              icon={Archive}
+              label="Arquivar"
+              onClick={() => onArchive(robot.processKey)}
+              variant="muted"
+            />
+          )}
         </div>
       </div>
     </motion.div>
@@ -236,6 +259,7 @@ const variantStyles = {
     "border-status-paused/30 text-status-paused hover:bg-status-paused/10",
   danger: "border-status-error/30 text-status-error hover:bg-status-error/10",
   accent: "border-accent/30 text-accent hover:bg-accent/10",
+  muted: "border-white/10 text-white/30 hover:bg-white/5",
 };
 
 function ActionButton({ icon: Icon, label, onClick, variant }) {
