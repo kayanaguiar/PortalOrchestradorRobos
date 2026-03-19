@@ -26,7 +26,7 @@ async def get_token(orchestrator_id: str, client_id: str, client_secret: str) ->
         "https://cloud.uipath.com/identity_/connect/token",
     )
 
-    async with httpx.AsyncClient() as client:
+    async with httpx.AsyncClient(timeout=15.0) as client:
         response = await client.post(
             token_url,
             data={

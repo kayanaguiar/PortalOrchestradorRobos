@@ -10,6 +10,7 @@ import httpx
 
 from uipath_auth import get_token
 from orchestrator_store import load_orchestrators, save_orchestrators
+from cache import get_cached, set_cached, clear_cache
 
 app = FastAPI(title="RoboCommand API")
 
@@ -24,7 +25,7 @@ app.add_middleware(
 async def uipath_get(orch: dict, endpoint: str, params: dict | None = None) -> dict:
     """Faz uma requisição GET autenticada a um orchestrator."""
     token = await get_token(orch["id"], orch["clientId"], orch["clientSecret"])
-    async with httpx.AsyncClient() as client:
+    async with httpx.AsyncClient(timeout=30.0) as client:
         response = await client.get(
             f"{orch['baseUrl']}/{endpoint}",
             params=params,
@@ -41,7 +42,7 @@ async def uipath_get(orch: dict, endpoint: str, params: dict | None = None) -> d
 async def uipath_post(orch: dict, endpoint: str, body: dict | None = None) -> dict:
     """Faz uma requisição POST autenticada a um orchestrator."""
     token = await get_token(orch["id"], orch["clientId"], orch["clientSecret"])
-    async with httpx.AsyncClient() as client:
+    async with httpx.AsyncClient(timeout=30.0) as client:
         response = await client.post(
             f"{orch['baseUrl']}/{endpoint}",
             json=body,
@@ -61,7 +62,7 @@ async def uipath_post(orch: dict, endpoint: str, body: dict | None = None) -> di
 async def uipath_patch(orch: dict, endpoint: str, body: dict | None = None) -> dict:
     """Faz uma requisição PATCH autenticada a um orchestrator."""
     token = await get_token(orch["id"], orch["clientId"], orch["clientSecret"])
-    async with httpx.AsyncClient() as client:
+    async with httpx.AsyncClient(timeout=30.0) as client:
         response = await client.patch(
             f"{orch['baseUrl']}/{endpoint}",
             json=body,
@@ -79,23 +80,27 @@ async def uipath_patch(orch: dict, endpoint: str, body: dict | None = None) -> d
 
 
 async def request_all_orchestrators(endpoint: str, params: dict | None = None) -> list:
-    """Faz a mesma requisição em todos os orchestrators e combina os resultados."""
+    """Faz a mesma requisição em todos os orchestrators em PARALELO e combina os resultados."""
+    import asyncio
     orchestrators = load_orchestrators()
-    all_values = []
 
-    for orch in orchestrators:
+    async def fetch_one(orch):
         if not orch.get("clientId") or not orch.get("clientSecret"):
-            continue
+            return []
         try:
             data = await uipath_get(orch, endpoint, params)
             values = data.get("value", [])
             for item in values:
                 item["_orchestratorId"] = orch["id"]
                 item["_orchestratorName"] = orch["name"]
-            all_values.extend(values)
+            return values
         except Exception:
-            pass
+            return []
 
+    results = await asyncio.gather(*[fetch_one(orch) for orch in orchestrators])
+    all_values = []
+    for values in results:
+        all_values.extend(values)
     return all_values
 
 
@@ -139,6 +144,11 @@ async def get_logs(
     orchestrator_id: str | None = Query(None),
 ):
     """Busca logs de todos os orchestrators (ou de um específico)."""
+    cache_key = f"logs:{top}:{skip}:{filter}:{orderby}:{orchestrator_id}"
+    cached = get_cached(cache_key, ttl=5)
+    if cached:
+        return cached
+
     params = {
         "$top": top,
         "$skip": skip,
@@ -153,11 +163,15 @@ async def get_logs(
         orch = next((o for o in orchestrators if o["id"] == orchestrator_id), None)
         if not orch:
             raise HTTPException(status_code=404, detail="Orchestrator não encontrado")
-        return await uipath_get(orch, "RobotLogs", params)
+        result = await uipath_get(orch, "RobotLogs", params)
+        set_cached(cache_key, result)
+        return result
 
     all_logs = await request_all_orchestrators("RobotLogs", params)
     all_logs.sort(key=lambda x: x.get("TimeStamp", ""), reverse=True)
-    return {"value": all_logs[:top], "@odata.count": len(all_logs)}
+    result = {"value": all_logs[:top], "@odata.count": len(all_logs)}
+    set_cached(cache_key, result)
+    return result
 
 
 @app.get("/api/logs/job/{job_key}")
@@ -185,6 +199,11 @@ async def get_jobs(
     orderby: str = Query("CreationTime desc", alias="$orderby"),
 ):
     """Busca jobs de todos os orchestrators."""
+    cache_key = f"jobs:{top}:{filter}:{orderby}"
+    cached = get_cached(cache_key, ttl=5)
+    if cached:
+        return cached
+
     params = {
         "$top": top,
         "$orderby": orderby,
@@ -195,7 +214,9 @@ async def get_jobs(
 
     all_jobs = await request_all_orchestrators("Jobs", params)
     all_jobs.sort(key=lambda x: x.get("CreationTime", ""), reverse=True)
-    return {"value": all_jobs[:top], "@odata.count": len(all_jobs)}
+    result = {"value": all_jobs[:top], "@odata.count": len(all_jobs)}
+    set_cached(cache_key, result)
+    return result
 
 
 # ─── Job Actions (Start/Stop/Pause/Resume) ───────────────
@@ -231,7 +252,9 @@ async def start_job(req: StartJobRequest):
             "RuntimeType": "Unattended",
         }
     }
-    return await uipath_post(orch, "Jobs/UiPath.Server.Configuration.OData.StartJobs", body)
+    result = await uipath_post(orch, "Jobs/UiPath.Server.Configuration.OData.StartJobs", body)
+    clear_cache()
+    return result
 
 
 @app.post("/api/jobs/stop")
@@ -242,7 +265,9 @@ async def stop_job(req: JobActionRequest):
         "jobIds": [req.jobId],
         "strategy": req.strategy,
     }
-    return await uipath_post(orch, "Jobs/UiPath.Server.Configuration.OData.StopJobs", body)
+    result = await uipath_post(orch, "Jobs/UiPath.Server.Configuration.OData.StopJobs", body)
+    clear_cache()
+    return result
 
 
 
@@ -261,14 +286,41 @@ def _version_is_newer(latest: str, current: str) -> bool:
 
 @app.get("/api/processes")
 async def get_processes():
-    """Busca processos de todos os orchestrators, com info de versão mais recente."""
-    all_procs = await request_all_orchestrators("Releases", {"$orderby": "Name"})
+    """Busca processos de todos os orchestrators (rápido, sem buscar versões)."""
+    cached = get_cached("processes", ttl=10)
+    if cached:
+        return cached
 
-    # Para cada processo, busca a versão mais recente disponível
+    all_procs = await request_all_orchestrators("Releases", {"$orderby": "Name"})
+    for proc in all_procs:
+        proc["_latestVersion"] = None
+        proc["_hasUpdate"] = False
+    result = {"value": all_procs}
+    set_cached("processes", result)
+    return result
+
+
+@app.get("/api/processes/check-updates")
+async def check_process_updates():
+    """Busca versões mais recentes de cada processo (pode demorar)."""
+    all_procs = await request_all_orchestrators("Releases", {"$orderby": "Name"})
+    results = []
+
     for proc in all_procs:
         orch_id = proc.get("_orchestratorId")
         process_key = proc.get("ProcessKey")
-        if orch_id and process_key:
+        current_version = proc.get("ProcessVersion")
+        auto_update = proc.get("AutoUpdate", False)
+
+        entry = {
+            "name": proc.get("Name"),
+            "orchestratorId": orch_id,
+            "currentVersion": current_version,
+            "latestVersion": None,
+            "hasUpdate": False,
+        }
+
+        if orch_id and process_key and not auto_update:
             try:
                 orch = _find_orchestrator(orch_id)
                 versions = await uipath_get(
@@ -278,18 +330,18 @@ async def get_processes():
                 )
                 latest = (versions.get("value") or [{}])[0]
                 latest_version = latest.get("Version")
-                current_version = proc.get("ProcessVersion")
-                proc["_latestVersion"] = latest_version
-                # Só marca update se a versão mais recente existir e for maior que a atual
-                proc["_hasUpdate"] = bool(
-                    latest_version and current_version and latest_version != current_version
+                entry["latestVersion"] = latest_version
+                entry["hasUpdate"] = bool(
+                    latest_version and current_version
+                    and latest_version != current_version
                     and _version_is_newer(latest_version, current_version)
                 )
             except Exception:
-                proc["_latestVersion"] = None
-                proc["_hasUpdate"] = False
+                pass
 
-    return {"value": all_procs}
+        results.append(entry)
+
+    return {"value": results}
 
 
 # ─── Process Version Update ───────────────────────────────
@@ -347,6 +399,10 @@ _previous_online_assistants: dict[str, dict] = {}
 @app.get("/api/sessions")
 async def get_sessions():
     """Busca sessões ativas e detecta assistants que ficaram offline."""
+    cached = get_cached("sessions", ttl=10)
+    if cached:
+        return cached
+
     global _previous_online_assistants
     all_sessions = await request_all_orchestrators("Sessions")
 
@@ -371,10 +427,12 @@ async def get_sessions():
 
     _previous_online_assistants = current_online
 
-    return {
+    result = {
         "value": all_sessions,
         "recentlyOffline": gone_offline,
     }
+    set_cached("sessions", result)
+    return result
 
 
 # ─── Settings ─────────────────────────────────────────────

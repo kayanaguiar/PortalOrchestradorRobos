@@ -90,7 +90,7 @@ export default function LogsPage({ robots, searchTerm: externalSearch }) {
       const dayStart = `${jobDate}T00:00:00Z`;
       const dayEnd = `${jobDate}T23:59:59Z`;
       const filter = `ProcessName eq '${job.ReleaseName}' and TimeStamp ge ${dayStart} and TimeStamp le ${dayEnd}`;
-      const data = await fetchLogs({ top: 1000, filter, orderby: "TimeStamp desc" });
+      const data = await fetchLogs({ top: 500, filter, orderby: "TimeStamp desc", orchestratorId: job._orchestratorId });
       const allLogs = data.value || [];
       // Filtra pelo JobKey no frontend e reordena cronologicamente
       const filtered = allLogs

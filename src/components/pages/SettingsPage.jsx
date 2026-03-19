@@ -34,11 +34,30 @@ export default function SettingsPage({ pollingInterval, onPollingChange, searchT
   const [loadError, setLoadError] = useState(null);
   const [showSecrets, setShowSecrets] = useState({});
 
-  // Carrega orchestrators do backend
+  // Carrega orchestrators do backend com retry
+  const [orchLoading, setOrchLoading] = useState(true);
   useEffect(() => {
-    fetchOrchestrators()
-      .then((data) => setOrchestrators(data))
-      .catch(() => setLoadError("Backend offline — inicie o servidor Python"));
+    let cancelled = false;
+    async function load() {
+      for (let attempt = 0; attempt < 3; attempt++) {
+        try {
+          const data = await fetchOrchestrators();
+          if (!cancelled) {
+            setOrchestrators(Array.isArray(data) ? data : []);
+            setOrchLoading(false);
+          }
+          return;
+        } catch {
+          if (attempt < 2) await new Promise((r) => setTimeout(r, 1000));
+        }
+      }
+      if (!cancelled) {
+        setLoadError("Erro ao carregar configurações");
+        setOrchLoading(false);
+      }
+    }
+    load();
+    return () => { cancelled = true; };
   }, []);
 
   const updateOrch = (id, field, value) => {
@@ -150,7 +169,7 @@ export default function SettingsPage({ pollingInterval, onPollingChange, searchT
         <div>
           <h2 className="text-sm font-semibold text-white">Orchestrators</h2>
           <p className="text-[11px] text-white/30 mt-0.5 font-mono">
-            {orchestrators.length} CONFIGURADOS
+            {orchLoading ? "CARREGANDO..." : `${orchestrators.length} CONFIGURADOS`}
           </p>
         </div>
         <button

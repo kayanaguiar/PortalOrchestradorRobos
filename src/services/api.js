@@ -30,12 +30,13 @@ async function postRequest(endpoint, body) {
 
 // ─── Logs ────────────────────────────────────────
 
-export async function fetchLogs({ top = 50, skip = 0, filter, orderby } = {}) {
+export async function fetchLogs({ top = 50, skip = 0, filter, orderby, orchestratorId } = {}) {
   return request(`${API_BASE}/logs`, {
     "$top": top,
     "$skip": skip,
     "$filter": filter,
     "$orderby": orderby,
+    orchestrator_id: orchestratorId,
   });
 }
 
@@ -66,6 +67,10 @@ export async function stopJob(orchestratorId, jobId, strategy = "SoftStop") {
 
 export async function resumeJob(orchestratorId, jobId) {
   return postRequest("/jobs/resume", { orchestratorId, jobId });
+}
+
+export async function fetchProcessUpdates() {
+  return request(`${API_BASE}/processes/check-updates`);
 }
 
 // ─── Process Versions ────────────────────────────

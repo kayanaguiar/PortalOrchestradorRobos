@@ -11,7 +11,7 @@ import SettingsPage from "./components/pages/SettingsPage";
 import { useUiPathLogs, useUiPathJobs, useUiPathProcesses, useUiPathSessions, useUiPathHealth } from "./hooks/useUiPathData";
 import ConfirmModal from "./components/ConfirmModal";
 import Toast from "./components/Toast";
-import { startJob, stopJob, fetchSettings, fetchProcessVersions, updateProcessVersion } from "./services/api";
+import { startJob, stopJob, fetchSettings, fetchProcessVersions, updateProcessVersion, fetchProcessUpdates } from "./services/api";
 
 const pageConfig = {
   "/": { id: "dashboard", title: "Dashboard", subtitle: "VISÃO GERAL" },
@@ -32,7 +32,7 @@ function mapJobStatus(state) {
   }
 }
 
-function apiJobsToRobots(jobs, logs, releases) {
+function apiJobsToRobots(jobs, logs, releases, updates = {}) {
   const latestLogByProcess = {};
   for (const log of logs) {
     const name = log.ProcessName;
@@ -48,8 +48,8 @@ function apiJobsToRobots(jobs, logs, releases) {
       key: rel.Key,
       id: rel.Id,
       version: rel.ProcessVersion,
-      latestVersion: rel._latestVersion,
-      hasUpdate: rel._hasUpdate === true && rel.AutoUpdate === false,
+      latestVersion: updates[rel.Name]?.latestVersion || null,
+      hasUpdate: updates[rel.Name]?.hasUpdate === true,
       orchestratorId: rel._orchestratorId,
     };
   }
@@ -194,6 +194,21 @@ export default function App() {
   const { sessions: apiSessions, recentlyOffline, loading: sessionsLoading, refresh: refreshSessions } = useUiPathSessions(intervalMs);
   const { connected, orchestratorStatuses, loading: healthLoading, refresh: refreshHealth } = useUiPathHealth();
 
+  // Updates de versão em background (não bloqueia nada)
+  const [processUpdates, setProcessUpdates] = useState({});
+  useEffect(() => {
+    if (!connected) return;
+    fetchProcessUpdates()
+      .then((data) => {
+        const map = {};
+        for (const item of data.value || []) {
+          map[item.name] = item;
+        }
+        setProcessUpdates(map);
+      })
+      .catch(() => {});
+  }, [connected, apiReleases]);
+
   const lastUpdated = useMemo(() => {
     const times = [logsLastUpdated, jobsLastUpdated].filter(Boolean);
     return times.length ? new Date(Math.max(...times)) : null;
@@ -204,8 +219,8 @@ export default function App() {
   const dataReady = !initialLoading && connected;
 
   const robots = useMemo(
-    () => apiJobsToRobots(apiJobs, apiLogs, apiReleases),
-    [apiJobs, apiLogs, apiReleases]
+    () => apiJobsToRobots(apiJobs, apiLogs, apiReleases, processUpdates),
+    [apiJobs, apiLogs, apiReleases, processUpdates]
   );
 
   const activityLogs = useMemo(

@@ -137,7 +137,7 @@ export default function RobotsPage({ robots, onAction, searchTerm: externalSearc
       const dayStart = `${jobDate}T00:00:00Z`;
       const dayEnd = `${jobDate}T23:59:59Z`;
       const filter = `ProcessName eq '${selectedRobot.name}' and TimeStamp ge ${dayStart} and TimeStamp le ${dayEnd}`;
-      const data = await fetchLogs({ top: 1000, filter, orderby: "TimeStamp desc" });
+      const data = await fetchLogs({ top: 500, filter, orderby: "TimeStamp desc", orchestratorId: selectedRobot.orchestratorId });
       const allLogs = data.value || [];
       const filtered = allLogs
         .filter((log) => log.JobKey === execution.jobKey)
