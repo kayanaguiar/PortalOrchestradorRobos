@@ -85,6 +85,16 @@ export async function updateProcessVersion(orchestratorId, releaseName, packageV
   return postRequest("/processes/update-version", { orchestratorId, releaseName, packageVersion });
 }
 
+// ─── Packages (pacotes no feed) ──────────────────
+
+export async function fetchPackages() {
+  return request(`${API_BASE}/packages`);
+}
+
+export async function createRelease(data) {
+  return postRequest("/releases/create", data);
+}
+
 // ─── Processes ───────────────────────────────────
 
 export async function fetchProcesses() {
@@ -105,6 +115,14 @@ export async function fetchTriggers() {
 
 export async function setTriggerEnable(orchestratorId, scheduleId, enabled) {
   return postRequest("/triggers/set-enable", { orchestratorId, scheduleId, enabled });
+}
+
+export async function updateTrigger(orchestratorId, triggerId, data) {
+  return postRequest("/triggers/update", { orchestratorId, triggerId, ...data });
+}
+
+export async function createTrigger(data) {
+  return postRequest("/triggers/create", data);
 }
 
 // ─── Archived Processes ──────────────────────────

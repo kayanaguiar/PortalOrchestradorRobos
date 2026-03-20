@@ -59,6 +59,26 @@ async def uipath_post(orch: dict, endpoint: str, body: dict | None = None) -> di
         return response.json()
 
 
+async def uipath_put(orch: dict, endpoint: str, body: dict | None = None) -> dict:
+    """Faz uma requisição PUT autenticada a um orchestrator."""
+    token = await get_token(orch["id"], orch["clientId"], orch["clientSecret"])
+    async with httpx.AsyncClient(timeout=30.0) as client:
+        response = await client.put(
+            f"{orch['baseUrl']}/{endpoint}",
+            json=body,
+            headers={
+                "Authorization": f"Bearer {token}",
+                "X-UIPATH-OrganizationUnitId": orch["folderId"],
+                "Content-Type": "application/json",
+            },
+        )
+        if response.status_code not in (200, 201, 202, 204):
+            raise HTTPException(status_code=response.status_code, detail=response.text)
+        if response.status_code == 204 or not response.content:
+            return {"status": "ok"}
+        return response.json()
+
+
 async def uipath_patch(orch: dict, endpoint: str, body: dict | None = None) -> dict:
     """Faz uma requisição PATCH autenticada a um orchestrator."""
     token = await get_token(orch["id"], orch["clientId"], orch["clientSecret"])
@@ -272,6 +292,43 @@ async def stop_job(req: JobActionRequest):
 
 
 
+# ─── Packages (pacotes publicados no feed) ────────────────
+
+@app.get("/api/packages")
+async def get_packages():
+    """Busca pacotes disponíveis no feed de todos os orchestrators."""
+    cached = get_cached("packages", ttl=30)
+    if cached:
+        return cached
+    all_packages = await request_all_orchestrators("Processes")
+    result = {"value": all_packages}
+    set_cached("packages", result)
+    return result
+
+
+class CreateReleaseRequest(BaseModel):
+    orchestratorId: str
+    name: str
+    processKey: str
+    processVersion: str
+    entryPointPath: str = "Main.xaml"
+
+
+@app.post("/api/releases/create")
+async def create_release(req: CreateReleaseRequest):
+    """Cria um novo processo (Release) a partir de um pacote."""
+    orch = _find_orchestrator(req.orchestratorId)
+    body = {
+        "Name": req.name,
+        "ProcessKey": req.processKey,
+        "ProcessVersion": req.processVersion,
+        "EntryPointPath": req.entryPointPath,
+    }
+    result = await uipath_post(orch, "Releases", body)
+    clear_cache()
+    return result
+
+
 def _version_is_newer(latest: str, current: str) -> bool:
     """Compara versões semânticas (ex: 1.1.89 vs 1.1.83). Retorna True se latest > current."""
     try:
@@ -455,12 +512,87 @@ class SetEnableRequest(BaseModel):
     enabled: bool
 
 
+def _clean_schedule_for_put(data: dict) -> dict:
+    """Remove campos que causam conflito no PUT de ProcessSchedules."""
+    # SpecificPriorityValue conflita com JobPriority quando é null/Normal
+    if data.get("JobPriority") is None or data.get("JobPriority") == "Normal":
+        data.pop("SpecificPriorityValue", None)
+    return data
+
+
 @app.post("/api/triggers/set-enable")
 async def set_trigger_enable(req: SetEnableRequest):
-    """Habilita ou desabilita um gatilho."""
+    """Habilita ou desabilita um gatilho via PUT."""
     orch = _find_orchestrator(req.orchestratorId)
-    body = {"enabled": req.enabled, "scheduleIds": [req.scheduleId]}
-    result = await uipath_post(orch, "ProcessSchedules/UiPath.Server.Configuration.OData.SetEnable", body)
+    current = await uipath_get(orch, f"ProcessSchedules({req.scheduleId})")
+    current["Enabled"] = req.enabled
+    current = _clean_schedule_for_put(current)
+    result = await uipath_put(orch, f"ProcessSchedules({req.scheduleId})", current)
+    clear_cache()
+    return result
+
+
+class CreateTriggerRequest(BaseModel):
+    orchestratorId: str
+    name: str
+    releaseKey: str
+    startProcessCron: str
+    timeZoneId: str = "E. South America Standard Time"
+    enabled: bool = True
+
+
+@app.post("/api/triggers/create")
+async def create_trigger(req: CreateTriggerRequest):
+    """Cria um novo gatilho no UiPath."""
+    orch = _find_orchestrator(req.orchestratorId)
+    # Busca todos os releases e filtra pelo Key no Python
+    data = await uipath_get(orch, "Releases")
+    releases = [r for r in (data.get("value") or []) if r.get("Key") == req.releaseKey]
+    release_id = releases[0]["Id"] if releases else None
+    release_name = releases[0]["Name"] if releases else req.name
+
+    body = {
+        "Name": req.name,
+        "ReleaseName": release_name,
+        "StartProcessCron": req.startProcessCron,
+        "StartProcessCronDetails": f'{{"advancedCron":"{req.startProcessCron}"}}',
+        "StartStrategy": 1,
+        "TimeZoneId": req.timeZoneId,
+        "Enabled": req.enabled,
+        "RuntimeType": "Unattended",
+    }
+    if release_id:
+        body["ReleaseId"] = release_id
+    body["ReleaseKey"] = req.releaseKey
+
+    result = await uipath_post(orch, "ProcessSchedules", body)
+    clear_cache()
+    return result
+
+
+class UpdateTriggerRequest(BaseModel):
+    orchestratorId: str
+    triggerId: int
+    name: str
+    startProcessCron: str
+    timeZoneId: str
+    enabled: bool
+
+
+@app.post("/api/triggers/update")
+async def update_trigger(req: UpdateTriggerRequest):
+    """Atualiza um gatilho (PUT no ProcessSchedule)."""
+    orch = _find_orchestrator(req.orchestratorId)
+    # Busca o trigger atual pra manter campos obrigatórios
+    current = await uipath_get(orch, f"ProcessSchedules({req.triggerId})")
+    # Atualiza só os campos editáveis
+    current["Name"] = req.name
+    current["StartProcessCron"] = req.startProcessCron
+    current["StartProcessCronDetails"] = f'{{"advancedCron":"{req.startProcessCron}"}}'
+    current["TimeZoneId"] = req.timeZoneId
+    current["Enabled"] = req.enabled
+    current = _clean_schedule_for_put(current)
+    result = await uipath_put(orch, f"ProcessSchedules({req.triggerId})", current)
     clear_cache()
     return result
 

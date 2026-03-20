@@ -15,10 +15,14 @@ import {
   Server,
   Loader2,
   Search,
+  Plus,
+  X,
 } from "lucide-react";
 import { motion } from "motion/react";
-import { fetchLogs, fetchJobs } from "../../services/api";
+import { fetchLogs, fetchJobs, fetchPackages, fetchOrchestrators, createRelease } from "../../services/api";
 import DatePicker from "../DatePicker";
+import CustomSelect from "../CustomSelect";
+import { createPortal } from "react-dom";
 
 const statusConfig = {
   running: {
@@ -154,6 +158,48 @@ export default function RobotsPage({ robots, onAction, searchTerm: externalSearc
     setSelectedRobotId(null);
     setSearchParams({});
   };
+
+  // ─── Criar Processo ──────────────────────────
+  const [showCreateModal, setShowCreateModal] = useState(false);
+  const [packages, setPackages] = useState([]);
+  const [orchList, setOrchList] = useState([]);
+  const [createForm, setCreateForm] = useState({ orchestratorId: "", packageId: "", name: "", version: "" });
+  const [createSaving, setCreateSaving] = useState(false);
+
+  const openCreateModal = useCallback(async () => {
+    setShowCreateModal(true);
+    setCreateForm({ orchestratorId: "", packageId: "", name: "", version: "" });
+    try {
+      const [pkgData, orchData] = await Promise.all([fetchPackages(), fetchOrchestrators()]);
+      setPackages(pkgData.value || []);
+      setOrchList(Array.isArray(orchData) ? orchData : []);
+    } catch {}
+  }, []);
+
+  const selectedPackage = packages.find((p) =>
+    p.Id === createForm.packageId && p._orchestratorId === createForm.orchestratorId
+  );
+
+  const handleCreate = useCallback(async () => {
+    if (!createForm.orchestratorId || !selectedPackage) return;
+    setCreateSaving(true);
+    try {
+      await createRelease({
+        orchestratorId: createForm.orchestratorId,
+        name: createForm.name || selectedPackage.Title,
+        processKey: selectedPackage.Id,
+        processVersion: selectedPackage.Version,
+        entryPointPath: selectedPackage.MainEntryPointPath || "Main.xaml",
+      });
+      setShowCreateModal(false);
+      // Recarrega a página
+      window.location.reload();
+    } catch (err) {
+      alert(`Erro ao criar processo: ${err.message}`);
+    } finally {
+      setCreateSaving(false);
+    }
+  }, [createForm, selectedPackage]);
 
   // ─── Detail View ───────────────────────────────
   if (selectedRobot) {
@@ -348,12 +394,21 @@ export default function RobotsPage({ robots, onAction, searchTerm: externalSearc
 
   // ─── List View ─────────────────────────────────
   return (
-    <div className="rounded-xl border border-white/5 bg-surface-800/60 overflow-hidden">
-      <div className="px-5 py-4 border-b border-white/5">
-        <h2 className="text-sm font-semibold text-white">Todos os Robôs</h2>
-        <p className="text-[11px] text-white/30 mt-0.5 font-mono">
-          {robots.length} ROBÔS — CLIQUE PARA VER LOGS
-        </p>
+    <div>
+      <div className="rounded-xl border border-white/5 bg-surface-800/60 overflow-hidden">
+      <div className="px-5 py-4 border-b border-white/5 flex items-center justify-between">
+        <div>
+          <h2 className="text-sm font-semibold text-white">Todos os Robôs</h2>
+          <p className="text-[11px] text-white/30 mt-0.5 font-mono">
+            {robots.length} ROBÔS — CLIQUE PARA VER LOGS
+          </p>
+        </div>
+        <button
+          onClick={openCreateModal}
+          className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-accent/30 text-accent text-xs font-medium hover:bg-accent/10 transition-all cursor-pointer"
+        >
+          <Plus className="w-3.5 h-3.5" /> Novo Processo
+        </button>
       </div>
       <div className="divide-y divide-white/[0.03]">
         {robots.map((robot, i) => {
@@ -395,6 +450,98 @@ export default function RobotsPage({ robots, onAction, searchTerm: externalSearc
           );
         })}
       </div>
+    </div>
+
+    {/* Modal Criar Processo */}
+    {showCreateModal && createPortal(
+      <div className="fixed inset-0 z-[9999] flex items-center justify-center">
+        <div className="absolute inset-0 bg-black/60 backdrop-blur-sm" onClick={() => setShowCreateModal(false)} />
+        <div className="relative w-full max-w-lg mx-4 rounded-xl border border-white/10 bg-surface-800 shadow-2xl shadow-black/50 p-6">
+          <div className="flex items-center justify-between mb-5">
+            <h3 className="text-sm font-semibold text-white">Novo Processo</h3>
+            <button onClick={() => setShowCreateModal(false)} className="text-white/20 hover:text-white/50 cursor-pointer">
+              <X className="w-5 h-5" />
+            </button>
+          </div>
+
+          <div className="space-y-4">
+            <div>
+              <label className="text-[10px] uppercase tracking-wider text-white/30 mb-1.5 block">Orchestrator</label>
+              <CustomSelect
+                value={createForm.orchestratorId}
+                onChange={(v) => setCreateForm((f) => ({ ...f, orchestratorId: v, packageId: "", name: "", version: "" }))}
+                placeholder="Selecionar orchestrator..."
+                options={orchList.map((o) => ({ value: o.id, label: o.name }))}
+                className="w-full"
+              />
+            </div>
+
+            <div>
+              <label className="text-[10px] uppercase tracking-wider text-white/30 mb-1.5 block">Pacote (publicado no feed)</label>
+              <CustomSelect
+                value={createForm.packageId}
+                onChange={(v) => {
+                  const pkg = packages.find((p) => p.Id === v && p._orchestratorId === createForm.orchestratorId);
+                  setCreateForm((f) => ({
+                    ...f,
+                    packageId: v,
+                    name: pkg?.Title || v,
+                    version: pkg?.Version || "",
+                  }));
+                }}
+                placeholder="Selecionar pacote..."
+                options={packages
+                  .filter((p) => p._orchestratorId === createForm.orchestratorId)
+                  .map((p) => ({ value: p.Id, label: p.Title, subtitle: `v${p.Version} — ${p.Description || "Sem descrição"}` }))}
+                className="w-full"
+              />
+            </div>
+
+            {selectedPackage && (
+              <>
+                <div>
+                  <label className="text-[10px] uppercase tracking-wider text-white/30 mb-1.5 block">Nome do Processo</label>
+                  <input
+                    type="text"
+                    value={createForm.name}
+                    onChange={(e) => setCreateForm((f) => ({ ...f, name: e.target.value }))}
+                    className="w-full bg-surface-900/60 border border-white/5 rounded-lg px-3 py-2 text-sm text-white/70 focus:outline-none focus:border-accent/30 focus:ring-1 focus:ring-accent/20"
+                  />
+                </div>
+
+                <div className="p-3 rounded-lg bg-surface-900/60 border border-white/5">
+                  <p className="text-[10px] uppercase tracking-wider text-white/30 mb-2">Detalhes do Pacote</p>
+                  <div className="grid grid-cols-2 gap-2 text-xs font-mono">
+                    <div><span className="text-white/30">Versão:</span> <span className="text-white/60">{selectedPackage.Version}</span></div>
+                    <div><span className="text-white/30">Framework:</span> <span className="text-white/60">{selectedPackage.TargetFramework}</span></div>
+                    <div><span className="text-white/30">Autor:</span> <span className="text-white/60">{selectedPackage.Authors}</span></div>
+                    <div><span className="text-white/30">Entry Point:</span> <span className="text-white/60">{selectedPackage.MainEntryPointPath}</span></div>
+                  </div>
+                </div>
+              </>
+            )}
+          </div>
+
+          <div className="flex justify-end gap-2 mt-6">
+            <button
+              onClick={() => setShowCreateModal(false)}
+              className="px-4 py-2 rounded-lg border border-white/5 text-xs font-medium text-white/50 hover:text-white/80 cursor-pointer"
+            >
+              Cancelar
+            </button>
+            <button
+              onClick={handleCreate}
+              disabled={createSaving || !createForm.orchestratorId || !selectedPackage}
+              className="flex items-center gap-2 px-4 py-2 rounded-lg bg-accent text-white text-xs font-medium hover:bg-accent-light cursor-pointer disabled:opacity-50"
+            >
+              {createSaving && <Loader2 className="w-3.5 h-3.5 animate-spin" />}
+              Criar Processo
+            </button>
+          </div>
+        </div>
+      </div>,
+      document.body
+    )}
     </div>
   );
 }

@@ -8,9 +8,14 @@ import {
   XCircle,
   Timer,
   Globe,
+  Pencil,
+  X,
 } from "lucide-react";
+import { createPortal } from "react-dom";
 import { motion } from "motion/react";
-import { fetchTriggers, setTriggerEnable } from "../../services/api";
+import { fetchTriggers, setTriggerEnable, updateTrigger, createTrigger, fetchProcesses } from "../../services/api";
+import TimezoneSelect from "../TimezoneSelect";
+import CustomSelect from "../CustomSelect";
 
 function formatNextOccurrence(ts) {
   if (!ts) return "\u2014";
@@ -27,13 +32,21 @@ export default function TriggersPage({ addToast }) {
   const [loading, setLoading] = useState(true);
   const [searchTerm, setSearchTerm] = useState("");
   const [orchFilter, setOrchFilter] = useState("all");
+  const [editingTrigger, setEditingTrigger] = useState(null);
+  const [isCreating, setIsCreating] = useState(false);
+  const [editForm, setEditForm] = useState({ name: "", startProcessCron: "", timeZoneId: "E. South America Standard Time", enabled: true, orchestratorId: "", releaseKey: "" });
+  const [saving, setSaving] = useState(false);
+  const [processes, setProcesses] = useState([]);
   const [togglingIds, setTogglingIds] = useState(new Set());
 
-  // Fetch triggers on mount
+  // Fetch triggers e processos on mount
   useEffect(() => {
     setLoading(true);
-    fetchTriggers()
-      .then((data) => setTriggers(data.value || []))
+    Promise.all([fetchTriggers(), fetchProcesses()])
+      .then(([triggersData, processesData]) => {
+        setTriggers(triggersData.value || []);
+        setProcesses(processesData.value || []);
+      })
       .catch(() => {
         setTriggers([]);
         addToast?.("error", "Erro ao carregar gatilhos");
@@ -114,6 +127,68 @@ export default function TriggersPage({ addToast }) {
     }
   }, [addToast]);
 
+  const openEdit = useCallback((trigger) => {
+    setIsCreating(false);
+    setEditingTrigger(trigger);
+    setEditForm({
+      name: trigger.Name || "",
+      startProcessCron: trigger.StartProcessCron || "",
+      timeZoneId: trigger.TimeZoneId || "E. South America Standard Time",
+      enabled: trigger.Enabled,
+      orchestratorId: trigger._orchestratorId || "",
+      releaseKey: trigger.ReleaseKey || "",
+    });
+  }, []);
+
+  const openCreate = useCallback(() => {
+    setIsCreating(true);
+    setEditingTrigger({});
+    setEditForm({
+      name: "",
+      startProcessCron: "0 0/30 8-18 ? * MON-FRI *",
+      timeZoneId: "E. South America Standard Time",
+      enabled: true,
+      orchestratorId: orchestratorNames[0]?.[0] || "",
+      releaseKey: "",
+    });
+  }, [orchestratorNames]);
+
+  const handleSaveEdit = useCallback(async () => {
+    if (!editingTrigger) return;
+    setSaving(true);
+    try {
+      if (isCreating) {
+        await createTrigger({
+          orchestratorId: editForm.orchestratorId,
+          name: editForm.name,
+          releaseKey: editForm.releaseKey,
+          startProcessCron: editForm.startProcessCron,
+          timeZoneId: editForm.timeZoneId,
+          enabled: editForm.enabled,
+        });
+        // Recarrega triggers
+        const data = await fetchTriggers();
+        setTriggers(data.value || []);
+        addToast?.("success", `Gatilho "${editForm.name}" criado`);
+      } else {
+        await updateTrigger(editingTrigger._orchestratorId, editingTrigger.Id, editForm);
+        setTriggers((prev) =>
+          prev.map((t) =>
+            t.Id === editingTrigger.Id && t._orchestratorId === editingTrigger._orchestratorId
+              ? { ...t, Name: editForm.name, StartProcessCron: editForm.startProcessCron, TimeZoneId: editForm.timeZoneId, Enabled: editForm.enabled }
+              : t
+          )
+        );
+        addToast?.("success", `Gatilho "${editForm.name}" atualizado`);
+      }
+      setEditingTrigger(null);
+    } catch (err) {
+      addToast?.("error", `Erro ao salvar: ${err.message}`);
+    } finally {
+      setSaving(false);
+    }
+  }, [editingTrigger, isCreating, editForm, addToast]);
+
   return (
     <div className="space-y-6">
       {/* Counters */}
@@ -168,6 +243,13 @@ export default function TriggersPage({ addToast }) {
         <span className="font-mono text-[11px] text-white/20">
           {filteredTriggers.length} resultado{filteredTriggers.length !== 1 ? "s" : ""}
         </span>
+
+        <button
+          onClick={openCreate}
+          className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-accent/30 text-accent text-xs font-medium hover:bg-accent/10 transition-all cursor-pointer ml-auto"
+        >
+          <Timer className="w-3.5 h-3.5" /> Novo Gatilho
+        </button>
       </div>
 
       {/* Loading */}
@@ -263,9 +345,15 @@ export default function TriggersPage({ addToast }) {
                       </div>
                     </div>
 
-                    {/* Right: toggle + button */}
-                    <div className="flex items-center gap-3 shrink-0">
+                    {/* Right: actions */}
+                    <div className="flex items-center gap-2 shrink-0">
                       {isToggling && <Loader2 className="w-3.5 h-3.5 animate-spin text-white/30" />}
+                      <button
+                        onClick={() => openEdit(trigger)}
+                        className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-accent/30 text-accent text-xs font-medium hover:bg-accent/10 transition-all cursor-pointer"
+                      >
+                        <Pencil className="w-3.5 h-3.5" /> Editar
+                      </button>
                       <button
                         onClick={() => handleToggle(trigger)}
                         disabled={isToggling}
@@ -289,6 +377,118 @@ export default function TriggersPage({ addToast }) {
           </div>
         </motion.div>
       ))}
+      {/* Edit modal */}
+      {editingTrigger && createPortal(
+        <div className="fixed inset-0 z-[9999] flex items-center justify-center">
+          <div className="absolute inset-0 bg-black/60 backdrop-blur-sm" onClick={() => setEditingTrigger(null)} />
+          <div className="relative w-full max-w-lg mx-4 rounded-xl border border-white/10 bg-surface-800 shadow-2xl shadow-black/50 p-6">
+            <div className="flex items-center justify-between mb-5">
+              <div>
+                <h3 className="text-sm font-semibold text-white">{isCreating ? "Novo Gatilho" : "Editar Gatilho"}</h3>
+                {!isCreating && <p className="text-[11px] text-white/30 font-mono mt-0.5">{editingTrigger.ReleaseName}</p>}
+              </div>
+              <button onClick={() => setEditingTrigger(null)} className="text-white/20 hover:text-white/50 cursor-pointer">
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            <div className="space-y-4">
+              {/* Orchestrator + Robô (só na criação) */}
+              {isCreating && (
+                <>
+                  <div>
+                    <label className="text-[10px] uppercase tracking-wider text-white/30 mb-1.5 block">Orchestrator</label>
+                    <CustomSelect
+                      value={editForm.orchestratorId}
+                      onChange={(v) => setEditForm((f) => ({ ...f, orchestratorId: v, releaseKey: "" }))}
+                      placeholder="Selecionar orchestrator..."
+                      options={orchestratorNames.map(([id, name]) => ({ value: id, label: name }))}
+                      className="w-full"
+                    />
+                  </div>
+                  <div>
+                    <label className="text-[10px] uppercase tracking-wider text-white/30 mb-1.5 block">Robô / Processo</label>
+                    <CustomSelect
+                      value={editForm.releaseKey}
+                      onChange={(v) => setEditForm((f) => ({ ...f, releaseKey: v }))}
+                      placeholder="Selecionar processo..."
+                      options={processes
+                        .filter((p) => p._orchestratorId === editForm.orchestratorId)
+                        .map((p) => ({ value: p.Key, label: p.Name, subtitle: `v${p.ProcessVersion}` }))}
+                      className="w-full"
+                    />
+                  </div>
+                </>
+              )}
+
+              <div>
+                <label className="text-[10px] uppercase tracking-wider text-white/30 mb-1.5 block">Nome</label>
+                <input
+                  type="text"
+                  value={editForm.name}
+                  onChange={(e) => setEditForm((f) => ({ ...f, name: e.target.value }))}
+                  className="w-full bg-surface-900/60 border border-white/5 rounded-lg px-3 py-2 text-sm text-white/70 focus:outline-none focus:border-accent/30 focus:ring-1 focus:ring-accent/20"
+                />
+              </div>
+
+              <div>
+                <label className="text-[10px] uppercase tracking-wider text-white/30 mb-1.5 block">Expressão Cron</label>
+                <input
+                  type="text"
+                  value={editForm.startProcessCron}
+                  onChange={(e) => setEditForm((f) => ({ ...f, startProcessCron: e.target.value }))}
+                  placeholder="0 0/30 8-18 ? * MON-FRI *"
+                  className="w-full bg-surface-900/60 border border-white/5 rounded-lg px-3 py-2 text-sm text-white/70 font-mono focus:outline-none focus:border-accent/30 focus:ring-1 focus:ring-accent/20"
+                />
+                <p className="text-[10px] text-white/20 mt-1 font-mono">
+                  Atual: {editingTrigger.StartProcessCronSummary || "—"}
+                </p>
+              </div>
+
+              <div>
+                <label className="text-[10px] uppercase tracking-wider text-white/30 mb-1.5 block">Fuso Horário</label>
+                <TimezoneSelect
+                  value={editForm.timeZoneId}
+                  onChange={(v) => setEditForm((f) => ({ ...f, timeZoneId: v }))}
+                  className="w-full"
+                />
+              </div>
+
+              <div className="flex items-center gap-3">
+                <label className="text-[10px] uppercase tracking-wider text-white/30">Habilitado</label>
+                <button
+                  onClick={() => setEditForm((f) => ({ ...f, enabled: !f.enabled }))}
+                  className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg border text-xs font-medium cursor-pointer ${
+                    editForm.enabled
+                      ? "border-status-running/30 text-status-running bg-status-running/10"
+                      : "border-white/10 text-white/30 bg-white/5"
+                  }`}
+                >
+                  {editForm.enabled ? "Sim" : "Não"}
+                </button>
+              </div>
+            </div>
+
+            <div className="flex justify-end gap-2 mt-6">
+              <button
+                onClick={() => setEditingTrigger(null)}
+                className="px-4 py-2 rounded-lg border border-white/5 text-xs font-medium text-white/50 hover:text-white/80 cursor-pointer"
+              >
+                Cancelar
+              </button>
+              <button
+                onClick={handleSaveEdit}
+                disabled={saving}
+                className="flex items-center gap-2 px-4 py-2 rounded-lg bg-accent text-white text-xs font-medium hover:bg-accent-light cursor-pointer disabled:opacity-50"
+              >
+                {saving && <Loader2 className="w-3.5 h-3.5 animate-spin" />}
+                Salvar
+              </button>
+            </div>
+          </div>
+        </div>,
+        document.body
+      )}
     </div>
   );
 }
