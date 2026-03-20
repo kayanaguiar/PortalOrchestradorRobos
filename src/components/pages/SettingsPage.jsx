@@ -1,4 +1,4 @@
-import { useState, useEffect, useMemo } from "react";
+import { useState, useEffect, useMemo, useRef } from "react";
 import {
   Wifi,
   WifiOff,
@@ -75,9 +75,10 @@ export default function SettingsPage({ pollingInterval, onPollingChange, searchT
     setShowSecrets((prev) => ({ ...prev, [id]: !prev[id] }));
   };
 
+  const orchListRef = useRef(null);
+
   const addOrchestrator = () => {
     setOrchestrators((prev) => [
-      ...prev,
       {
         id: `orch-${Date.now()}`,
         name: "",
@@ -87,7 +88,9 @@ export default function SettingsPage({ pollingInterval, onPollingChange, searchT
         clientSecret: "",
         status: "disconnected",
       },
+      ...prev,
     ]);
+    setTimeout(() => orchListRef.current?.scrollIntoView({ behavior: "smooth", block: "start" }), 50);
   };
 
   const handleSave = async () => {
@@ -182,7 +185,7 @@ export default function SettingsPage({ pollingInterval, onPollingChange, searchT
         </button>
       </div>
 
-      <div className="space-y-4">
+      <div ref={orchListRef} className="space-y-4">
         {orchestrators.filter((o) => {
           if (!searchTerm) return true;
           const s = searchTerm.toLowerCase();

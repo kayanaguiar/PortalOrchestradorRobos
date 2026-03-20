@@ -16,6 +16,7 @@ import { motion } from "motion/react";
 import { fetchTriggers, setTriggerEnable, updateTrigger, createTrigger, fetchProcesses } from "../../services/api";
 import TimezoneSelect from "../TimezoneSelect";
 import CustomSelect from "../CustomSelect";
+import CronBuilder from "../CronBuilder";
 
 function formatNextOccurrence(ts) {
   if (!ts) return "\u2014";
@@ -431,19 +432,10 @@ export default function TriggersPage({ addToast }) {
                 />
               </div>
 
-              <div>
-                <label className="text-[10px] uppercase tracking-wider text-white/30 mb-1.5 block">Expressão Cron</label>
-                <input
-                  type="text"
-                  value={editForm.startProcessCron}
-                  onChange={(e) => setEditForm((f) => ({ ...f, startProcessCron: e.target.value }))}
-                  placeholder="0 0/30 8-18 ? * MON-FRI *"
-                  className="w-full bg-surface-900/60 border border-white/5 rounded-lg px-3 py-2 text-sm text-white/70 font-mono focus:outline-none focus:border-accent/30 focus:ring-1 focus:ring-accent/20"
-                />
-                <p className="text-[10px] text-white/20 mt-1 font-mono">
-                  Atual: {editingTrigger.StartProcessCronSummary || "—"}
-                </p>
-              </div>
+              <CronBuilder
+                value={editForm.startProcessCron}
+                onChange={(v) => setEditForm((f) => ({ ...f, startProcessCron: v }))}
+              />
 
               <div>
                 <label className="text-[10px] uppercase tracking-wider text-white/30 mb-1.5 block">Fuso Horário</label>

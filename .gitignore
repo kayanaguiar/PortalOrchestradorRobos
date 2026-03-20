@@ -4,3 +4,5 @@ dist
 __pycache__
 *.pyc
 server/venv
+server/data/
+certs/*.pem

@@ -17,6 +17,110 @@
   --font-mono: "JetBrains Mono", monospace;
 }
 
+/* ─── Light theme overrides ─────────────────────── */
+html.light {
+  --color-surface-900: #f1f5f9;
+  --color-surface-800: #e2e8f0;
+  --color-surface-700: #cbd5e1;
+  --color-surface-600: #94a3b8;
+  --color-surface-500: #64748b;
+  --color-accent: #0055dd;
+  --color-accent-light: #2672f0;
+  --color-accent-dim: #0055dd22;
+  --color-status-running: #16a34a;
+  --color-status-paused: #ca8a04;
+  --color-status-stopped: #64748b;
+  --color-status-error: #dc2626;
+}
+
+html.light body {
+  color: #1e293b;
+}
+
+html.light .hud-grid {
+  background-image:
+    linear-gradient(rgba(0, 85, 221, 0.04) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(0, 85, 221, 0.04) 1px, transparent 1px);
+}
+
+html.light .glow-running {
+  box-shadow: 0 0 15px rgba(22, 163, 74, 0.12), 0 0 40px rgba(22, 163, 74, 0.04);
+}
+html.light .glow-error {
+  box-shadow: 0 0 15px rgba(220, 38, 38, 0.12), 0 0 40px rgba(220, 38, 38, 0.04);
+}
+html.light .glow-accent {
+  box-shadow: 0 0 15px rgba(0, 85, 221, 0.15), 0 0 40px rgba(0, 85, 221, 0.06);
+}
+
+html.light .scanline::after {
+  background: linear-gradient(to bottom, transparent, rgba(0, 85, 221, 0.02), transparent);
+}
+
+/* Light theme: invert white opacity references */
+html.light ::-webkit-scrollbar-track {
+  background: #e2e8f0;
+}
+html.light ::-webkit-scrollbar-thumb {
+  background: #94a3b8;
+}
+
+/* Light theme: text/border overrides for white/ opacity classes */
+html.light [class*="text-white"] {
+  --tw-text-opacity: 1;
+}
+html.light .text-white\/80, html.light .text-white\/70, html.light .text-white\/60 {
+  color: #334155;
+}
+html.light .text-white\/50, html.light .text-white\/40, html.light .text-white\/30 {
+  color: #64748b;
+}
+html.light .text-white\/20, html.light .text-white\/15, html.light .text-white\/10 {
+  color: #94a3b8;
+}
+html.light .text-white {
+  color: #0f172a;
+}
+
+html.light .placeholder\:text-white\/20::placeholder,
+html.light .placeholder\:text-white\/15::placeholder {
+  color: #94a3b8;
+}
+
+html.light .border-white\/5, html.light .border-white\/10,
+html.light .border-white\/\[0\.04\], html.light .border-white\/\[0\.06\] {
+  border-color: rgba(15, 23, 42, 0.1);
+}
+
+html.light .bg-white\/5, html.light .bg-white\/\[0\.04\],
+html.light .bg-white\/\[0\.02\] {
+  background-color: rgba(15, 23, 42, 0.04);
+}
+
+html.light .hover\:bg-white\/5:hover, html.light .hover\:bg-white\/\[0\.04\]:hover {
+  background-color: rgba(15, 23, 42, 0.06);
+}
+
+html.light .hover\:text-white\/60:hover, html.light .hover\:text-white\/80:hover {
+  color: #1e293b;
+}
+
+html.light .hover\:border-white\/10:hover {
+  border-color: rgba(15, 23, 42, 0.15);
+}
+
+html.light .divide-white\/\[0\.03\] > :not([hidden]) ~ :not([hidden]) {
+  border-color: rgba(15, 23, 42, 0.06);
+}
+
+/* Light: shadow adjustments */
+html.light .shadow-2xl {
+  --tw-shadow-color: rgba(0, 0, 0, 0.08);
+}
+html.light .shadow-black\/50, html.light .shadow-black\/40 {
+  --tw-shadow-color: rgba(0, 0, 0, 0.08);
+}
+
 body {
   margin: 0;
   background: var(--color-surface-900);

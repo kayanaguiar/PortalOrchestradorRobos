@@ -3,20 +3,38 @@ from dotenv import load_dotenv
 
 load_dotenv(os.path.join(os.path.dirname(__file__), "..", ".env"))
 
-from fastapi import FastAPI, Query, HTTPException
+from fastapi import FastAPI, Query, HTTPException, Request, Depends
+from fastapi.responses import JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 import httpx
+from slowapi import Limiter, _rate_limit_exceeded_handler
+from slowapi.util import get_remote_address
+from slowapi.errors import RateLimitExceeded
 
 from uipath_auth import get_token
-from orchestrator_store import load_orchestrators, save_orchestrators
+from orchestrator_store import load_orchestrators, save_orchestrators, get_shared_orchestrators, set_shared_orchestrators
 from cache import get_cached, set_cached, clear_cache
+from auth import verify_password, create_token, get_current_user, hash_password, generate_user_id, create_default_admin, require_admin, require_operator, require_viewer
+from database import SessionLocal
+from models import ArchivedProcess, Setting
 
+limiter = Limiter(key_func=get_remote_address)
 app = FastAPI(title="RoboCommand API")
+app.state.limiter = limiter
+
+
+@app.exception_handler(RateLimitExceeded)
+async def rate_limit_handler(request: Request, exc: RateLimitExceeded):
+    return JSONResponse(
+        status_code=429,
+        content={"detail": "Muitas requisições. Tente novamente em alguns instantes."},
+    )
+
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:5173"],
+    allow_origins=["*"],
     allow_methods=["*"],
     allow_headers=["*"],
 )
@@ -99,10 +117,10 @@ async def uipath_patch(orch: dict, endpoint: str, body: dict | None = None) -> d
         return response.json()
 
 
-async def request_all_orchestrators(endpoint: str, params: dict | None = None) -> list:
+async def request_all_orchestrators(endpoint: str, params: dict | None = None, user: dict | None = None) -> list:
     """Faz a mesma requisição em todos os orchestrators em PARALELO e combina os resultados."""
     import asyncio
-    orchestrators = load_orchestrators()
+    orchestrators = load_orchestrators(user=user)
 
     async def fetch_one(orch):
         if not orch.get("clientId") or not orch.get("clientSecret"):
@@ -124,12 +142,52 @@ async def request_all_orchestrators(endpoint: str, params: dict | None = None) -
     return all_values
 
 
+# ─── Auth ─────────────────────────────────────────────────
+
+class LoginRequest(BaseModel):
+    email: str
+    password: str
+
+
+@app.post("/api/auth/login")
+@limiter.limit("10/minute")
+async def login(request: Request, req: LoginRequest):
+    from models import User
+    db = SessionLocal()
+    try:
+        user = db.query(User).filter_by(email=req.email).first()
+        if not user or not verify_password(req.password, user.password_hash):
+            raise HTTPException(status_code=401, detail="Credenciais inválidas")
+        if not user.active:
+            raise HTTPException(status_code=401, detail="Usuário inativo")
+        token = create_token(user.id, user.email, user.role)
+        return {
+            "token": token,
+            "user": {"id": user.id, "name": user.name, "email": user.email, "role": user.role},
+        }
+    finally:
+        db.close()
+
+
+@app.get("/api/auth/me")
+async def get_me(payload: dict = Depends(require_viewer)):
+    from models import User
+    db = SessionLocal()
+    try:
+        user = db.query(User).filter_by(id=payload["sub"]).first()
+        if not user:
+            raise HTTPException(status_code=401, detail="Usuário não encontrado")
+        return {"id": user.id, "name": user.name, "email": user.email, "role": user.role}
+    finally:
+        db.close()
+
+
 # ─── Health ───────────────────────────────────────────────
 
 @app.get("/api/health")
-async def health():
+async def health(_user: dict = Depends(require_viewer)):
     """Verifica conexão com cada orchestrator individualmente."""
-    orchestrators = load_orchestrators()
+    orchestrators = load_orchestrators(user=_user)
     connected_count = 0
     orch_statuses = []
 
@@ -162,6 +220,7 @@ async def get_logs(
     filter: str | None = Query(None, alias="$filter"),
     orderby: str = Query("TimeStamp desc", alias="$orderby"),
     orchestrator_id: str | None = Query(None),
+    _user: dict = Depends(require_viewer),
 ):
     """Busca logs de todos os orchestrators (ou de um específico)."""
     cache_key = f"logs:{top}:{skip}:{filter}:{orderby}:{orchestrator_id}"
@@ -179,15 +238,12 @@ async def get_logs(
         params["$filter"] = filter
 
     if orchestrator_id:
-        orchestrators = load_orchestrators()
-        orch = next((o for o in orchestrators if o["id"] == orchestrator_id), None)
-        if not orch:
-            raise HTTPException(status_code=404, detail="Orchestrator não encontrado")
+        orch = _find_orchestrator(orchestrator_id, user=_user)
         result = await uipath_get(orch, "RobotLogs", params)
         set_cached(cache_key, result)
         return result
 
-    all_logs = await request_all_orchestrators("RobotLogs", params)
+    all_logs = await request_all_orchestrators("RobotLogs", params, user=_user)
     all_logs.sort(key=lambda x: x.get("TimeStamp", ""), reverse=True)
     result = {"value": all_logs[:top], "@odata.count": len(all_logs)}
     set_cached(cache_key, result)
@@ -195,7 +251,7 @@ async def get_logs(
 
 
 @app.get("/api/logs/job/{job_key}")
-async def get_logs_by_job(job_key: str, process_name: str | None = Query(None)):
+async def get_logs_by_job(job_key: str, process_name: str | None = Query(None), _user: dict = Depends(require_viewer)):
     """Busca logs de um job específico. Filtra por ProcessName na API e por JobKey no servidor."""
     params = {
         "$top": 500,
@@ -204,7 +260,7 @@ async def get_logs_by_job(job_key: str, process_name: str | None = Query(None)):
     if process_name:
         params["$filter"] = f"ProcessName eq '{process_name}'"
 
-    all_logs = await request_all_orchestrators("RobotLogs", params)
+    all_logs = await request_all_orchestrators("RobotLogs", params, user=_user)
     # Filtra pelo JobKey no servidor (campo não filtrável via OData)
     filtered = [log for log in all_logs if log.get("JobKey") == job_key]
     return {"value": filtered}
@@ -217,6 +273,7 @@ async def get_jobs(
     top: int = Query(100, alias="$top"),
     filter: str | None = Query(None, alias="$filter"),
     orderby: str = Query("CreationTime desc", alias="$orderby"),
+    _user: dict = Depends(require_viewer),
 ):
     """Busca jobs de todos os orchestrators."""
     cache_key = f"jobs:{top}:{filter}:{orderby}"
@@ -232,7 +289,7 @@ async def get_jobs(
     if filter:
         params["$filter"] = filter
 
-    all_jobs = await request_all_orchestrators("Jobs", params)
+    all_jobs = await request_all_orchestrators("Jobs", params, user=_user)
     all_jobs.sort(key=lambda x: x.get("CreationTime", ""), reverse=True)
     result = {"value": all_jobs[:top], "@odata.count": len(all_jobs)}
     set_cached(cache_key, result)
@@ -241,8 +298,8 @@ async def get_jobs(
 
 # ─── Job Actions (Start/Stop/Pause/Resume) ───────────────
 
-def _find_orchestrator(orchestrator_id: str) -> dict:
-    orchestrators = load_orchestrators()
+def _find_orchestrator(orchestrator_id: str, user: dict | None = None) -> dict:
+    orchestrators = load_orchestrators(user=user)
     orch = next((o for o in orchestrators if o["id"] == orchestrator_id), None)
     if not orch:
         raise HTTPException(status_code=404, detail="Orchestrator não encontrado")
@@ -261,9 +318,10 @@ class JobActionRequest(BaseModel):
 
 
 @app.post("/api/jobs/start")
-async def start_job(req: StartJobRequest):
+@limiter.limit("20/minute")
+async def start_job(request: Request, req: StartJobRequest, _user: dict = Depends(require_operator)):
     """Inicia um job no UiPath."""
-    orch = _find_orchestrator(req.orchestratorId)
+    orch = _find_orchestrator(req.orchestratorId, user=_user)
     body = {
         "startInfo": {
             "ReleaseKey": req.releaseKey,
@@ -278,9 +336,10 @@ async def start_job(req: StartJobRequest):
 
 
 @app.post("/api/jobs/stop")
-async def stop_job(req: JobActionRequest):
+@limiter.limit("20/minute")
+async def stop_job(request: Request, req: JobActionRequest, _user: dict = Depends(require_operator)):
     """Para um job (SoftStop ou Kill)."""
-    orch = _find_orchestrator(req.orchestratorId)
+    orch = _find_orchestrator(req.orchestratorId, user=_user)
     body = {
         "jobIds": [req.jobId],
         "strategy": req.strategy,
@@ -295,12 +354,12 @@ async def stop_job(req: JobActionRequest):
 # ─── Packages (pacotes publicados no feed) ────────────────
 
 @app.get("/api/packages")
-async def get_packages():
+async def get_packages(_user: dict = Depends(require_viewer)):
     """Busca pacotes disponíveis no feed de todos os orchestrators."""
     cached = get_cached("packages", ttl=30)
     if cached:
         return cached
-    all_packages = await request_all_orchestrators("Processes")
+    all_packages = await request_all_orchestrators("Processes", user=_user)
     result = {"value": all_packages}
     set_cached("packages", result)
     return result
@@ -315,9 +374,9 @@ class CreateReleaseRequest(BaseModel):
 
 
 @app.post("/api/releases/create")
-async def create_release(req: CreateReleaseRequest):
+async def create_release(req: CreateReleaseRequest, _user: dict = Depends(require_operator)):
     """Cria um novo processo (Release) a partir de um pacote."""
-    orch = _find_orchestrator(req.orchestratorId)
+    orch = _find_orchestrator(req.orchestratorId, user=_user)
     body = {
         "Name": req.name,
         "ProcessKey": req.processKey,
@@ -342,13 +401,13 @@ def _version_is_newer(latest: str, current: str) -> bool:
 # ─── Processes ────────────────────────────────────────────
 
 @app.get("/api/processes")
-async def get_processes():
+async def get_processes(_user: dict = Depends(require_viewer)):
     """Busca processos de todos os orchestrators (rápido, sem buscar versões)."""
     cached = get_cached("processes", ttl=10)
     if cached:
         return cached
 
-    all_procs = await request_all_orchestrators("Releases", {"$orderby": "Name"})
+    all_procs = await request_all_orchestrators("Releases", {"$orderby": "Name"}, user=_user)
     for proc in all_procs:
         proc["_latestVersion"] = None
         proc["_hasUpdate"] = False
@@ -358,9 +417,9 @@ async def get_processes():
 
 
 @app.get("/api/processes/check-updates")
-async def check_process_updates():
+async def check_process_updates(_user: dict = Depends(require_viewer)):
     """Busca versões mais recentes de cada processo (pode demorar)."""
-    all_procs = await request_all_orchestrators("Releases", {"$orderby": "Name"})
+    all_procs = await request_all_orchestrators("Releases", {"$orderby": "Name"}, user=_user)
     results = []
 
     for proc in all_procs:
@@ -379,7 +438,7 @@ async def check_process_updates():
 
         if orch_id and process_key and not auto_update:
             try:
-                orch = _find_orchestrator(orch_id)
+                orch = _find_orchestrator(orch_id, user=_user)
                 versions = await uipath_get(
                     orch,
                     f"Processes/UiPath.Server.Configuration.OData.GetProcessVersions(processId='{process_key}')",
@@ -404,9 +463,9 @@ async def check_process_updates():
 # ─── Process Version Update ───────────────────────────────
 
 @app.get("/api/processes/{process_id}/versions")
-async def get_process_versions(process_id: str, orchestrator_id: str = Query(...)):
+async def get_process_versions(process_id: str, orchestrator_id: str = Query(...), _user: dict = Depends(require_viewer)):
     """Busca versões disponíveis de um processo."""
-    orch = _find_orchestrator(orchestrator_id)
+    orch = _find_orchestrator(orchestrator_id, user=_user)
     return await uipath_get(
         orch,
         f"Processes/UiPath.Server.Configuration.OData.GetProcessVersions(processId='{process_id}')",
@@ -421,9 +480,9 @@ class UpdateProcessVersionRequest(BaseModel):
 
 
 @app.post("/api/processes/update-version")
-async def update_process_version(req: UpdateProcessVersionRequest):
+async def update_process_version(req: UpdateProcessVersionRequest, _user: dict = Depends(require_operator)):
     """Atualiza o processo para uma versão específica do pacote."""
-    orch = _find_orchestrator(req.orchestratorId)
+    orch = _find_orchestrator(req.orchestratorId, user=_user)
     # Busca o Release pelo nome pra pegar o Id correto
     data = await uipath_get(orch, "Releases", {"$filter": f"Name eq '{req.releaseName}'"})
     releases = data.get("value", [])
@@ -441,9 +500,9 @@ async def update_process_version(req: UpdateProcessVersionRequest):
 # ─── Machines ─────────────────────────────────────────────
 
 @app.get("/api/machines")
-async def get_machines():
+async def get_machines(_user: dict = Depends(require_viewer)):
     """Busca máquinas de todos os orchestrators."""
-    all_machines = await request_all_orchestrators("Machines")
+    all_machines = await request_all_orchestrators("Machines", user=_user)
     return {"value": all_machines}
 
 
@@ -454,14 +513,14 @@ _previous_online_assistants: dict[str, dict] = {}
 
 
 @app.get("/api/sessions")
-async def get_sessions():
+async def get_sessions(_user: dict = Depends(require_viewer)):
     """Busca sessões ativas e detecta assistants que ficaram offline."""
     cached = get_cached("sessions", ttl=10)
     if cached:
         return cached
 
     global _previous_online_assistants
-    all_sessions = await request_all_orchestrators("Sessions")
+    all_sessions = await request_all_orchestrators("Sessions", user=_user)
 
     # Identifica assistants online agora
     current_online = {}
@@ -495,12 +554,12 @@ async def get_sessions():
 # ─── Triggers (ProcessSchedules) ──────────────────────────
 
 @app.get("/api/triggers")
-async def get_triggers():
+async def get_triggers(_user: dict = Depends(require_viewer)):
     """Busca todos os gatilhos de todos os orchestrators."""
     cached = get_cached("triggers", ttl=10)
     if cached:
         return cached
-    all_triggers = await request_all_orchestrators("ProcessSchedules")
+    all_triggers = await request_all_orchestrators("ProcessSchedules", user=_user)
     result = {"value": all_triggers}
     set_cached("triggers", result)
     return result
@@ -521,9 +580,9 @@ def _clean_schedule_for_put(data: dict) -> dict:
 
 
 @app.post("/api/triggers/set-enable")
-async def set_trigger_enable(req: SetEnableRequest):
+async def set_trigger_enable(req: SetEnableRequest, _user: dict = Depends(require_operator)):
     """Habilita ou desabilita um gatilho via PUT."""
-    orch = _find_orchestrator(req.orchestratorId)
+    orch = _find_orchestrator(req.orchestratorId, user=_user)
     current = await uipath_get(orch, f"ProcessSchedules({req.scheduleId})")
     current["Enabled"] = req.enabled
     current = _clean_schedule_for_put(current)
@@ -542,9 +601,9 @@ class CreateTriggerRequest(BaseModel):
 
 
 @app.post("/api/triggers/create")
-async def create_trigger(req: CreateTriggerRequest):
+async def create_trigger(req: CreateTriggerRequest, _user: dict = Depends(require_operator)):
     """Cria um novo gatilho no UiPath."""
-    orch = _find_orchestrator(req.orchestratorId)
+    orch = _find_orchestrator(req.orchestratorId, user=_user)
     # Busca todos os releases e filtra pelo Key no Python
     data = await uipath_get(orch, "Releases")
     releases = [r for r in (data.get("value") or []) if r.get("Key") == req.releaseKey]
@@ -580,9 +639,9 @@ class UpdateTriggerRequest(BaseModel):
 
 
 @app.post("/api/triggers/update")
-async def update_trigger(req: UpdateTriggerRequest):
+async def update_trigger(req: UpdateTriggerRequest, _user: dict = Depends(require_operator)):
     """Atualiza um gatilho (PUT no ProcessSchedule)."""
-    orch = _find_orchestrator(req.orchestratorId)
+    orch = _find_orchestrator(req.orchestratorId, user=_user)
     # Busca o trigger atual pra manter campos obrigatórios
     current = await uipath_get(orch, f"ProcessSchedules({req.triggerId})")
     # Atualiza só os campos editáveis
@@ -599,24 +658,15 @@ async def update_trigger(req: UpdateTriggerRequest):
 
 # ─── Archived Processes ───────────────────────────────────
 
-ARCHIVED_FILE = os.path.join(os.path.dirname(__file__), "data", "archived_processes.json")
-
-
-def _load_archived() -> list[str]:
-    if not os.path.exists(ARCHIVED_FILE):
-        return []
-    with open(ARCHIVED_FILE, "r", encoding="utf-8") as f:
-        return _json.load(f)
-
-
-def _save_archived(archived: list[str]):
-    with open(ARCHIVED_FILE, "w", encoding="utf-8") as f:
-        _json.dump(archived, f, indent=2, ensure_ascii=False)
-
 
 @app.get("/api/archived-processes")
-async def get_archived_processes():
-    return {"value": _load_archived()}
+async def get_archived_processes(_user: dict = Depends(require_viewer)):
+    db = SessionLocal()
+    try:
+        rows = db.query(ArchivedProcess).all()
+        return {"value": [r.process_key for r in rows]}
+    finally:
+        db.close()
 
 
 class ToggleArchiveRequest(BaseModel):
@@ -624,37 +674,57 @@ class ToggleArchiveRequest(BaseModel):
 
 
 @app.post("/api/archived-processes/toggle")
-async def toggle_archived_process(req: ToggleArchiveRequest):
-    archived = _load_archived()
-    if req.processKey in archived:
-        archived.remove(req.processKey)
-    else:
-        archived.append(req.processKey)
-    _save_archived(archived)
-    return {"value": archived}
+async def toggle_archived_process(req: ToggleArchiveRequest, _user: dict = Depends(require_operator)):
+    db = SessionLocal()
+    try:
+        existing = db.query(ArchivedProcess).filter_by(process_key=req.processKey).first()
+        if existing:
+            db.delete(existing)
+        else:
+            db.add(ArchivedProcess(process_key=req.processKey))
+        db.commit()
+        rows = db.query(ArchivedProcess).all()
+        return {"value": [r.process_key for r in rows]}
+    finally:
+        db.close()
 
 
 # ─── Settings ─────────────────────────────────────────────
 
-import json as _json
-
-SETTINGS_FILE = os.path.join(os.path.dirname(__file__), "data", "settings.json")
-
 
 def _load_settings() -> dict:
-    if not os.path.exists(SETTINGS_FILE):
-        return {"pollingInterval": 30}
-    with open(SETTINGS_FILE, "r", encoding="utf-8") as f:
-        return _json.load(f)
+    db = SessionLocal()
+    try:
+        rows = db.query(Setting).all()
+        if not rows:
+            return {"pollingInterval": 30}
+        result = {}
+        for r in rows:
+            try:
+                result[r.key] = int(r.value)
+            except ValueError:
+                result[r.key] = r.value
+        return result
+    finally:
+        db.close()
 
 
 def _save_settings(settings: dict):
-    with open(SETTINGS_FILE, "w", encoding="utf-8") as f:
-        _json.dump(settings, f, indent=2, ensure_ascii=False)
+    db = SessionLocal()
+    try:
+        for key, value in settings.items():
+            existing = db.query(Setting).filter_by(key=key).first()
+            if existing:
+                existing.value = str(value)
+            else:
+                db.add(Setting(key=key, value=str(value)))
+        db.commit()
+    finally:
+        db.close()
 
 
 @app.get("/api/settings")
-async def get_settings():
+async def get_settings(_user: dict = Depends(require_viewer)):
     return _load_settings()
 
 
@@ -663,7 +733,7 @@ class SettingsModel(BaseModel):
 
 
 @app.post("/api/settings")
-async def save_settings(settings: SettingsModel):
+async def save_settings(settings: SettingsModel, _user: dict = Depends(require_admin)):
     _save_settings(settings.model_dump())
     return {"status": "ok"}
 
@@ -681,9 +751,9 @@ class OrchestratorModel(BaseModel):
 
 
 @app.get("/api/orchestrators")
-async def list_orchestrators():
-    """Lista orchestrators (sem expor os secrets no retorno)."""
-    orchestrators = load_orchestrators()
+async def list_orchestrators(_user: dict = Depends(require_viewer)):
+    """Lista orchestrators do usuário (admin vê todos)."""
+    orchestrators = load_orchestrators(user=_user)
     return [
         {
             **orch,
@@ -695,10 +765,11 @@ async def list_orchestrators():
 
 
 @app.post("/api/orchestrators")
-async def save_all_orchestrators(orchestrators: list[OrchestratorModel]):
-    """Salva a lista completa de orchestrators."""
+async def save_all_orchestrators(orchestrators: list[OrchestratorModel], _user: dict = Depends(require_operator)):
+    """Salva orchestrators do usuário."""
+    owner_id = _user["sub"]
     # Se o secret veio mascarado, mantém o valor antigo
-    existing = {o["id"]: o for o in load_orchestrators()}
+    existing = {o["id"]: o for o in load_orchestrators(user=_user)}
     to_save = []
     for o in orchestrators:
         data = o.model_dump()
@@ -706,17 +777,17 @@ async def save_all_orchestrators(orchestrators: list[OrchestratorModel]):
             data["clientSecret"] = existing[data["id"]].get("clientSecret", "")
         to_save.append(data)
 
-    save_orchestrators(to_save)
+    save_orchestrators(to_save, owner_id=owner_id)
     return {"status": "ok", "count": len(to_save)}
 
 
 @app.post("/api/orchestrators/test")
-async def test_orchestrator(orch: OrchestratorModel):
+async def test_orchestrator(orch: OrchestratorModel, _user: dict = Depends(require_operator)):
     """Testa a conexão com um orchestrator específico."""
     # Se o secret veio mascarado, usa o salvo
     secret = orch.clientSecret
     if secret == "••••••••":
-        existing = {o["id"]: o for o in load_orchestrators()}
+        existing = {o["id"]: o for o in load_orchestrators(user=_user)}
         if orch.id in existing:
             secret = existing[orch.id].get("clientSecret", "")
 
@@ -728,6 +799,182 @@ async def test_orchestrator(orch: OrchestratorModel):
         return {"status": "ok", "connected": True, "logCount": data.get("@odata.count", 0)}
     except Exception as e:
         return {"status": "error", "connected": False, "detail": str(e)}
+
+
+# ─── Users CRUD (admin only) ─────────────────────────────
+
+class CreateUserRequest(BaseModel):
+    name: str
+    email: str
+    password: str
+    role: str = "viewer"
+
+
+class UpdateUserRequest(BaseModel):
+    name: str
+    email: str
+    role: str
+
+
+@app.get("/api/users")
+async def list_users(_user: dict = Depends(require_admin)):
+    from models import User
+    db = SessionLocal()
+    try:
+        users = db.query(User).all()
+        return [
+            {"id": u.id, "name": u.name, "email": u.email, "role": u.role, "active": u.active, "createdAt": str(u.created_at)}
+            for u in users
+        ]
+    finally:
+        db.close()
+
+
+@app.post("/api/users")
+async def create_user(req: CreateUserRequest, _user: dict = Depends(require_admin)):
+    from models import User
+    if req.role not in ("admin", "operator", "viewer"):
+        raise HTTPException(status_code=400, detail="Role inválida")
+    db = SessionLocal()
+    try:
+        if db.query(User).filter_by(email=req.email).first():
+            raise HTTPException(status_code=400, detail="E-mail já cadastrado")
+        user = User(
+            id=generate_user_id(),
+            name=req.name,
+            email=req.email,
+            password_hash=hash_password(req.password),
+            role=req.role,
+        )
+        db.add(user)
+        db.commit()
+        return {"id": user.id, "name": user.name, "email": user.email, "role": user.role}
+    finally:
+        db.close()
+
+
+@app.put("/api/users/{user_id}")
+async def update_user(user_id: str, req: UpdateUserRequest, current_user: dict = Depends(require_admin)):
+    from models import User
+    if req.role not in ("admin", "operator", "viewer"):
+        raise HTTPException(status_code=400, detail="Role inválida")
+    db = SessionLocal()
+    try:
+        user = db.query(User).filter_by(id=user_id).first()
+        if not user:
+            raise HTTPException(status_code=404, detail="Usuário não encontrado")
+        # Não permite remover admin se for o último
+        if user.role == "admin" and req.role != "admin":
+            admin_count = db.query(User).filter_by(role="admin").count()
+            if admin_count <= 1:
+                raise HTTPException(status_code=400, detail="Não é possível remover o último administrador")
+        # Verifica email duplicado
+        existing = db.query(User).filter_by(email=req.email).first()
+        if existing and existing.id != user_id:
+            raise HTTPException(status_code=400, detail="E-mail já cadastrado")
+        user.name = req.name
+        user.email = req.email
+        user.role = req.role
+        db.commit()
+        return {"id": user.id, "name": user.name, "email": user.email, "role": user.role}
+    finally:
+        db.close()
+
+
+@app.delete("/api/users/{user_id}")
+async def deactivate_user(user_id: str, current_user: dict = Depends(require_admin)):
+    """Inativa um usuário (não exclui do banco)."""
+    from models import User
+    if current_user["sub"] == user_id:
+        raise HTTPException(status_code=400, detail="Não é possível inativar seu próprio usuário")
+    db = SessionLocal()
+    try:
+        user = db.query(User).filter_by(id=user_id).first()
+        if not user:
+            raise HTTPException(status_code=404, detail="Usuário não encontrado")
+        if user.role == "admin":
+            admin_count = db.query(User).filter_by(role="admin", active=True).count()
+            if admin_count <= 1:
+                raise HTTPException(status_code=400, detail="Não é possível inativar o último administrador ativo")
+        # Transfere orchestrators para quem está inativando
+        from models import Orchestrator as OrchestratorModel_
+        transferred = db.query(OrchestratorModel_).filter_by(owner_id=user_id).update(
+            {"owner_id": current_user["sub"]}
+        )
+        # Remove compartilhamentos
+        from models import SharedOrchestrator
+        db.query(SharedOrchestrator).filter_by(user_id=user_id).delete()
+        user.active = False
+        db.commit()
+        return {"status": "ok", "transferred": transferred}
+    finally:
+        db.close()
+
+
+@app.post("/api/users/{user_id}/reactivate")
+async def reactivate_user(user_id: str, _user: dict = Depends(require_admin)):
+    """Reativa um usuário inativo."""
+    from models import User
+    db = SessionLocal()
+    try:
+        user = db.query(User).filter_by(id=user_id).first()
+        if not user:
+            raise HTTPException(status_code=404, detail="Usuário não encontrado")
+        user.active = True
+        db.commit()
+        return {"status": "ok"}
+    finally:
+        db.close()
+
+
+# ─── Shared Orchestrators (admin) ─────────────────────────
+
+@app.get("/api/users/{user_id}/orchestrators")
+async def get_user_orchestrators(user_id: str, _user: dict = Depends(require_admin)):
+    """Retorna IDs dos orchestrators compartilhados com um usuário."""
+    shared_ids = get_shared_orchestrators(user_id)
+    all_orchs = load_orchestrators()  # admin vê todos
+    return {
+        "shared": shared_ids,
+        "available": [{"id": o["id"], "name": o["name"], "ownerId": o.get("ownerId")} for o in all_orchs],
+    }
+
+
+class ShareOrchestratorsRequest(BaseModel):
+    orchestratorIds: list[str]
+
+
+@app.post("/api/users/{user_id}/orchestrators")
+async def set_user_orchestrators(user_id: str, req: ShareOrchestratorsRequest, _user: dict = Depends(require_admin)):
+    """Define quais orchestrators são compartilhados com um usuário."""
+    set_shared_orchestrators(user_id, req.orchestratorIds)
+    return {"status": "ok"}
+
+
+# ─── Change Password ─────────────────────────────────────
+
+class ChangePasswordRequest(BaseModel):
+    currentPassword: str
+    newPassword: str
+
+
+@app.post("/api/auth/change-password")
+async def change_password(req: ChangePasswordRequest, current_user: dict = Depends(require_viewer)):
+    from models import User
+    if len(req.newPassword) < 6:
+        raise HTTPException(status_code=400, detail="A nova senha deve ter pelo menos 6 caracteres")
+    db = SessionLocal()
+    try:
+        user = db.query(User).filter_by(id=current_user["sub"]).first()
+        if not user:
+            raise HTTPException(status_code=404, detail="Usuário não encontrado")
+        if not verify_password(req.currentPassword, user.password_hash):
+            raise HTTPException(status_code=400, detail="Senha atual incorreta")
+        user.password_hash = hash_password(req.newPassword)
+        db.commit()
+        return {"status": "ok"}
+    finally:
+        db.close()
 
 
 if __name__ == "__main__":

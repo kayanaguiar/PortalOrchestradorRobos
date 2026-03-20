@@ -7,6 +7,8 @@ RUN pip install --no-cache-dir -r requirements.txt
 
 COPY . .
 
+RUN chmod +x entrypoint.sh
+
 EXPOSE 3001
 
-CMD ["uvicorn", "app:app", "--host", "0.0.0.0", "--port", "3001"]
+CMD ["bash", "entrypoint.sh"]

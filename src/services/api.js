@@ -1,5 +1,10 @@
 const API_BASE = import.meta.env.VITE_API_URL || "/api";
 
+function getAuthHeaders() {
+  const token = localStorage.getItem("token");
+  return token ? { Authorization: `Bearer ${token}` } : {};
+}
+
 async function request(endpoint, params = {}) {
   const url = new URL(endpoint, window.location.origin);
   Object.entries(params).forEach(([key, value]) => {
@@ -8,7 +13,16 @@ async function request(endpoint, params = {}) {
     }
   });
 
-  const res = await fetch(url);
+  const res = await fetch(url, { headers: getAuthHeaders() });
+  if (res.status === 401) {
+    localStorage.removeItem("token");
+    localStorage.removeItem("user");
+    window.location.reload();
+    throw new Error("Sessão expirada");
+  }
+  if (res.status === 403) {
+    throw new Error("Sem permissão para esta ação");
+  }
   if (!res.ok) {
     throw new Error(`API ${res.status}: ${res.statusText}`);
   }
@@ -18,14 +32,99 @@ async function request(endpoint, params = {}) {
 async function postRequest(endpoint, body) {
   const res = await fetch(`${API_BASE}${endpoint}`, {
     method: "POST",
-    headers: { "Content-Type": "application/json" },
+    headers: { "Content-Type": "application/json", ...getAuthHeaders() },
     body: JSON.stringify(body),
   });
+  if (res.status === 401) {
+    localStorage.removeItem("token");
+    localStorage.removeItem("user");
+    window.location.reload();
+    throw new Error("Sessão expirada");
+  }
+  if (res.status === 403) {
+    const detail = await res.json().catch(() => ({ detail: "Sem permissão" }));
+    throw new Error(detail.detail || "Sem permissão para esta ação");
+  }
   if (!res.ok) {
     const detail = await res.text().catch(() => res.statusText);
     throw new Error(`API ${res.status}: ${detail}`);
   }
   return res.json();
+}
+
+async function putRequest(endpoint, body) {
+  const res = await fetch(`${API_BASE}${endpoint}`, {
+    method: "PUT",
+    headers: { "Content-Type": "application/json", ...getAuthHeaders() },
+    body: JSON.stringify(body),
+  });
+  if (res.status === 401) {
+    localStorage.removeItem("token");
+    localStorage.removeItem("user");
+    window.location.reload();
+    throw new Error("Sessão expirada");
+  }
+  if (res.status === 403) {
+    const detail = await res.json().catch(() => ({ detail: "Sem permissão" }));
+    throw new Error(detail.detail || "Sem permissão para esta ação");
+  }
+  if (!res.ok) {
+    const detail = await res.text().catch(() => res.statusText);
+    throw new Error(`API ${res.status}: ${detail}`);
+  }
+  return res.json();
+}
+
+async function deleteRequest(endpoint) {
+  const res = await fetch(`${API_BASE}${endpoint}`, {
+    method: "DELETE",
+    headers: getAuthHeaders(),
+  });
+  if (res.status === 401) {
+    localStorage.removeItem("token");
+    localStorage.removeItem("user");
+    window.location.reload();
+    throw new Error("Sessão expirada");
+  }
+  if (res.status === 403) {
+    const detail = await res.json().catch(() => ({ detail: "Sem permissão" }));
+    throw new Error(detail.detail || "Sem permissão para esta ação");
+  }
+  if (!res.ok) {
+    const detail = await res.text().catch(() => res.statusText);
+    throw new Error(`API ${res.status}: ${detail}`);
+  }
+  return res.json();
+}
+
+// ─── Auth ────────────────────────────────────────
+
+export async function login(email, password) {
+  const res = await fetch(`${API_BASE}/auth/login`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ email, password }),
+  });
+  if (!res.ok) {
+    const detail = await res.json().catch(() => ({ detail: "Erro ao fazer login" }));
+    throw new Error(detail.detail || "Credenciais inválidas");
+  }
+  const data = await res.json();
+  localStorage.setItem("token", data.token);
+  localStorage.setItem("user", JSON.stringify(data.user));
+  return data;
+}
+
+export function logout() {
+  localStorage.removeItem("token");
+  localStorage.removeItem("user");
+}
+
+export function getStoredUser() {
+  const user = localStorage.getItem("user");
+  const token = localStorage.getItem("token");
+  if (!user || !token) return null;
+  return JSON.parse(user);
 }
 
 // ─── Logs ────────────────────────────────────────
@@ -163,4 +262,40 @@ export async function saveOrchestrators(orchestrators) {
 
 export async function testOrchestrator(orchestrator) {
   return postRequest("/orchestrators/test", orchestrator);
+}
+
+// ─── Users ──────────────────────────────────────
+
+export async function fetchUsers() {
+  return request(`${API_BASE}/users`);
+}
+
+export async function createUser(data) {
+  return postRequest("/users", data);
+}
+
+export async function updateUser(userId, data) {
+  return putRequest(`/users/${userId}`, data);
+}
+
+export async function deleteUser(userId) {
+  return deleteRequest(`/users/${userId}`);
+}
+
+export async function reactivateUser(userId) {
+  return postRequest(`/users/${userId}/reactivate`, {});
+}
+
+export async function fetchUserOrchestrators(userId) {
+  return request(`${API_BASE}/users/${userId}/orchestrators`);
+}
+
+export async function saveUserOrchestrators(userId, orchestratorIds) {
+  return postRequest(`/users/${userId}/orchestrators`, { orchestratorIds });
+}
+
+// ─── Change Password ────────────────────────────
+
+export async function changePassword(currentPassword, newPassword) {
+  return postRequest("/auth/change-password", { currentPassword, newPassword });
 }

@@ -10,6 +10,7 @@ import {
   Loader2,
   ArrowUpCircle,
   Archive,
+  Star,
 } from "lucide-react";
 import { motion } from "motion/react";
 
@@ -44,7 +45,7 @@ const statusConfig = {
   },
 };
 
-export default function RobotCard({ robot, index, onAction, onArchive, onClick, loading }) {
+export default function RobotCard({ robot, index, onAction, onArchive, onClick, loading, userRole, isFavorite, onToggleFavorite }) {
   const config = statusConfig[robot.status] || statusConfig.inactive;
 
   return (
@@ -75,9 +76,20 @@ export default function RobotCard({ robot, index, onAction, onArchive, onClick, 
                 {config.label}
               </span>
             </div>
-            <h3 className="text-white font-semibold text-base truncate">
-              {robot.name}
-            </h3>
+            <div className="flex items-center gap-1.5">
+              <h3 className="text-white font-semibold text-base truncate">
+                {robot.name}
+              </h3>
+              {onToggleFavorite && (
+                <button
+                  onClick={(e) => { e.stopPropagation(); onToggleFavorite(robot.processKey); }}
+                  className="shrink-0 cursor-pointer"
+                  title={isFavorite ? "Remover favorito" : "Favoritar"}
+                >
+                  <Star className={`w-4 h-4 transition-all ${isFavorite ? "fill-amber-400 text-amber-400" : "text-white/15 hover:text-white/30"}`} />
+                </button>
+              )}
+            </div>
             <p className="text-white/30 text-xs mt-0.5 font-mono">
               {robot.orchestrator}
             </p>
@@ -183,7 +195,7 @@ export default function RobotCard({ robot, index, onAction, onArchive, onClick, 
         </div>
 
         {/* Action buttons */}
-        <div className="flex gap-2 pt-3 border-t border-white/5">
+        {userRole !== "viewer" && <div className="flex gap-2 pt-3 border-t border-white/5">
           {loading && (
             <div className="flex items-center gap-2 text-accent text-xs font-mono">
               <Loader2 className="w-3.5 h-3.5 animate-spin" />
@@ -246,7 +258,7 @@ export default function RobotCard({ robot, index, onAction, onArchive, onClick, 
               variant="muted"
             />
           )}
-        </div>
+        </div>}
       </div>
     </motion.div>
   );

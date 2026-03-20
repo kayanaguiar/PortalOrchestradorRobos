@@ -4,3 +4,7 @@ httpx
 python-dotenv
 sqlalchemy
 psycopg2-binary
+alembic
+pyjwt
+bcrypt
+slowapi

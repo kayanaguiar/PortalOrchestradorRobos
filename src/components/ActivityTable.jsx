@@ -44,7 +44,7 @@ export default function ActivityTable({ logs, pageSize, onPageSizeChange }) {
       </div>
 
       <div className="divide-y divide-white/[0.03]">
-        {logs.map((log, i) => {
+        {logs.slice(0, pageSize).map((log, i) => {
           const cfg = levelConfig[log.Level] || levelConfig.Info;
           const Icon = cfg.icon;
           return (

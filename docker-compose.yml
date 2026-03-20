@@ -27,6 +27,7 @@ services:
     environment:
       DATABASE_URL: postgresql://robocommand:${DB_PASSWORD:-robocommand123}@db:5432/robocommand
       UIPATH_TOKEN_URL: https://cloud.uipath.com/identity_/connect/token
+      JWT_SECRET: ${JWT_SECRET:-robocommand-dev-only-change-in-production}
     volumes:
       - ./server/data:/app/data
     depends_on:
@@ -40,7 +41,10 @@ services:
       dockerfile: Dockerfile
     restart: unless-stopped
     ports:
-      - "80:80"
+      - "9090:80"
+      - "443:443"
+    volumes:
+      - ./certs:/etc/nginx/ssl:ro
     depends_on:
       - backend
 

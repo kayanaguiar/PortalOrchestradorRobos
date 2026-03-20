@@ -1,6 +1,6 @@
 import { useState, useRef, useEffect, useMemo } from "react";
 import { createPortal } from "react-dom";
-import { Search, Bell, RefreshCw, Loader2, XCircle, AlertTriangle, X } from "lucide-react";
+import { Search, Bell, RefreshCw, Loader2, XCircle, AlertTriangle, X, LogOut, Lock, ChevronDown, Sun, Moon, Menu } from "lucide-react";
 import { motion } from "motion/react";
 
 function formatTimeAgo(ts) {
@@ -12,8 +12,9 @@ function formatTimeAgo(ts) {
   return `${Math.floor(diff / 86400)}d`;
 }
 
-export default function Header({ title, subtitle, loading, onRefresh, searchTerm, onSearchChange, notifications = [], onDismissNotification, onClearNotifications, lastUpdated }) {
+export default function Header({ title, subtitle, loading, onRefresh, searchTerm, onSearchChange, notifications = [], onDismissNotification, onClearNotifications, lastUpdated, user, onLogout, onChangePassword, theme, onToggleTheme, isMobile, onMenuToggle }) {
   const [showNotifications, setShowNotifications] = useState(false);
+  const [showUserMenu, setShowUserMenu] = useState(false);
   const [tick, setTick] = useState(0);
 
   // Atualiza o "há Xs" a cada segundo
@@ -118,25 +119,37 @@ export default function Header({ title, subtitle, loading, onRefresh, searchTerm
       transition={{ duration: 0.5 }}
       className="flex items-center justify-between mb-8"
     >
-      <div>
-        <h1 className="text-2xl font-bold text-white tracking-tight">
-          {title}
-        </h1>
-        <p className="text-sm text-white/30 font-mono mt-1">{subtitle}</p>
+      <div className="flex items-center gap-3">
+        {isMobile && (
+          <button
+            onClick={onMenuToggle}
+            className="w-9 h-9 rounded-lg bg-surface-700/50 border border-white/5 flex items-center justify-center text-white/30 hover:text-white/60 transition-all cursor-pointer"
+          >
+            <Menu className="w-5 h-5" />
+          </button>
+        )}
+        <div>
+          <h1 className={`font-bold text-white tracking-tight ${isMobile ? "text-lg" : "text-2xl"}`}>
+            {title}
+          </h1>
+          {!isMobile && <p className="text-sm text-white/30 font-mono mt-1">{subtitle}</p>}
+        </div>
       </div>
 
-      <div className="flex items-center gap-3">
+      <div className="flex items-center gap-2 md:gap-3">
         {/* Search */}
-        <div className="relative">
-          <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-white/20" />
-          <input
-            type="text"
-            value={searchTerm}
-            onChange={(e) => onSearchChange(e.target.value)}
-            placeholder="Buscar no portal..."
-            className="bg-surface-700/50 border border-white/5 rounded-lg pl-9 pr-4 py-2 text-sm text-white/70 placeholder:text-white/20 focus:outline-none focus:border-accent/30 focus:ring-1 focus:ring-accent/20 w-64 transition-all"
-          />
-        </div>
+        {!isMobile && (
+          <div className="relative">
+            <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-white/20" />
+            <input
+              type="text"
+              value={searchTerm}
+              onChange={(e) => onSearchChange(e.target.value)}
+              placeholder="Buscar no portal..."
+              className="bg-surface-700/50 border border-white/5 rounded-lg pl-9 pr-4 py-2 text-sm text-white/70 placeholder:text-white/20 focus:outline-none focus:border-accent/30 focus:ring-1 focus:ring-accent/20 w-64 transition-all"
+            />
+          </div>
+        )}
 
         {/* Refresh + last updated */}
         <div className="flex items-center gap-1.5">
@@ -154,6 +167,15 @@ export default function Header({ title, subtitle, loading, onRefresh, searchTerm
             )}
           </button>
         </div>
+
+        {/* Theme toggle */}
+        <button
+          onClick={onToggleTheme}
+          title={theme === "dark" ? "Tema claro" : "Tema escuro"}
+          className="w-9 h-9 rounded-lg bg-surface-700/50 border border-white/5 flex items-center justify-center text-white/30 hover:text-white/60 hover:border-white/10 transition-all cursor-pointer"
+        >
+          {theme === "dark" ? <Sun className="w-4 h-4" /> : <Moon className="w-4 h-4" />}
+        </button>
 
         {/* Notifications */}
         <button
@@ -175,9 +197,46 @@ export default function Header({ title, subtitle, loading, onRefresh, searchTerm
           )}
         </button>
 
-        {/* User avatar */}
-        <div className="w-9 h-9 rounded-lg bg-accent/20 border border-accent/30 flex items-center justify-center">
-          <span className="font-bold text-xs text-accent">MM</span>
+        {/* User menu */}
+        <div className="relative">
+          <button
+            onClick={() => setShowUserMenu((o) => !o)}
+            className="flex items-center gap-2 pl-1 pr-2 py-1 rounded-lg hover:bg-white/5 transition-all cursor-pointer"
+          >
+            <div className="w-9 h-9 rounded-lg bg-accent/20 border border-accent/30 flex items-center justify-center">
+              <span className="font-bold text-xs text-accent">
+                {(user?.name || "U").split(" ").map(w => w[0]).join("").slice(0, 2).toUpperCase()}
+              </span>
+            </div>
+            <ChevronDown className={`w-3.5 h-3.5 text-white/20 transition-transform ${showUserMenu ? "rotate-180" : ""}`} />
+          </button>
+          {showUserMenu && (
+            <>
+              <div className="fixed inset-0 z-[9998]" onClick={() => setShowUserMenu(false)} />
+              <div className="absolute right-0 top-full mt-2 w-56 z-[9999] rounded-xl border border-white/10 bg-surface-800 shadow-2xl shadow-black/50 overflow-hidden">
+                <div className="px-4 py-3 border-b border-white/5">
+                  <p className="text-sm font-medium text-white/80 truncate">{user?.name}</p>
+                  <p className="text-[11px] text-white/30 font-mono truncate">{user?.email}</p>
+                </div>
+                <div className="py-1">
+                  <button
+                    onClick={() => { setShowUserMenu(false); onChangePassword?.(); }}
+                    className="w-full flex items-center gap-2.5 px-4 py-2.5 text-sm text-white/60 hover:bg-white/[0.04] hover:text-white/80 transition-colors cursor-pointer"
+                  >
+                    <Lock className="w-4 h-4" />
+                    Alterar Senha
+                  </button>
+                  <button
+                    onClick={() => { setShowUserMenu(false); onLogout?.(); }}
+                    className="w-full flex items-center gap-2.5 px-4 py-2.5 text-sm text-status-error/70 hover:bg-status-error/5 hover:text-status-error transition-colors cursor-pointer"
+                  >
+                    <LogOut className="w-4 h-4" />
+                    Sair
+                  </button>
+                </div>
+              </div>
+            </>
+          )}
         </div>
       </div>
 

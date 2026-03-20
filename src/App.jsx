@@ -9,16 +9,21 @@ import RobotsPage from "./components/pages/RobotsPage";
 import LogsPage from "./components/pages/LogsPage";
 import SettingsPage from "./components/pages/SettingsPage";
 import TriggersPage from "./components/pages/TriggersPage";
+import UsersPage from "./components/pages/UsersPage";
+import ChangePasswordModal from "./components/ChangePasswordModal";
 import { useUiPathLogs, useUiPathJobs, useUiPathProcesses, useUiPathSessions, useUiPathHealth } from "./hooks/useUiPathData";
+import useMediaQuery from "./hooks/useMediaQuery";
 import ConfirmModal from "./components/ConfirmModal";
 import Toast from "./components/Toast";
-import { startJob, stopJob, fetchSettings, fetchProcessVersions, updateProcessVersion, fetchProcessUpdates, fetchArchivedProcesses, toggleArchivedProcess } from "./services/api";
+import { startJob, stopJob, fetchSettings, fetchProcessVersions, updateProcessVersion, fetchProcessUpdates, fetchArchivedProcesses, toggleArchivedProcess, login, logout, getStoredUser } from "./services/api";
+import LoginPage from "./components/pages/LoginPage";
 
 const pageConfig = {
   "/": { id: "dashboard", title: "Dashboard", subtitle: "VISÃO GERAL" },
   "/robots": { id: "robots", title: "Robôs", subtitle: "GERENCIAMENTO E DETALHES" },
   "/history": { id: "logs", title: "Histórico de Jobs", subtitle: "EXECUÇÕES DE TODOS OS ROBÔS" },
   "/triggers": { id: "triggers", title: "Gatilhos", subtitle: "AGENDAMENTOS E TRIGGERS" },
+  "/users": { id: "users", title: "Usuários", subtitle: "GERENCIAMENTO DE ACESSOS" },
   "/settings": { id: "settings", title: "Configurações", subtitle: "ORCHESTRATORS E CONEXÕES" },
 };
 
@@ -80,12 +85,21 @@ function buildRobots(releases, jobs, logs, updates = {}) {
     const updateInfo = updates[rel.Name] || {};
 
     let status, state, lastLog, runtime, machine;
+    const JOB_STATE_LABEL = {
+      Successful: "Execução finalizada com sucesso",
+      Stopped: "Execução interrompida",
+      Faulted: "Execução finalizada com erro",
+      Running: "Em execução",
+      Pending: "Aguardando execução",
+      Suspended: "Execução suspensa",
+    };
+
     if (job) {
       status = mapJobStatus(job.State);
       state = job.State;
       lastLog = latestLog
         ? { Level: latestLog.Level, Message: latestLog.Message, Timestamp: latestLog.TimeStamp }
-        : { Level: "Info", Message: job.Info || "—", Timestamp: job.CreationTime };
+        : { Level: "Info", Message: JOB_STATE_LABEL[job.State] || job.State, Timestamp: job.EndTime || job.CreationTime };
       runtime = job.StartTime
         ? formatRuntime(new Date(job.StartTime), job.EndTime ? new Date(job.EndTime) : new Date())
         : "00:00:00";
@@ -146,10 +160,60 @@ function apiLogsToActivityFormat(logs) {
 }
 
 export default function App() {
+  const [user, setUser] = useState(() => getStoredUser());
+  const navigate = useNavigate();
+
+  const handleLogin = async (email, password) => {
+    const data = await login(email, password);
+    setUser(data.user);
+    navigate("/");
+  };
+
+  const handleLogout = () => {
+    logout();
+    setUser(null);
+    navigate("/");
+  };
+
+  if (!user) {
+    return <LoginPage onLogin={handleLogin} />;
+  }
+
+  return <AuthenticatedApp user={user} onLogout={handleLogout} />;
+}
+
+function AuthenticatedApp({ user, onLogout }) {
   const navigate = useNavigate();
   const location = useLocation();
   const page = pageConfig[location.pathname] || pageConfig["/"];
   const activePage = page.id;
+  const [showChangePassword, setShowChangePassword] = useState(false);
+
+  // Mobile
+  const isMobile = useMediaQuery("(max-width: 768px)");
+  const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
+
+  // Favorites
+  const [favorites, setFavorites] = useState(() => {
+    try { return new Set(JSON.parse(localStorage.getItem("favoriteRobots") || "[]")); }
+    catch { return new Set(); }
+  });
+  const toggleFavorite = useCallback((processKey) => {
+    setFavorites((prev) => {
+      const next = new Set(prev);
+      if (next.has(processKey)) next.delete(processKey); else next.add(processKey);
+      localStorage.setItem("favoriteRobots", JSON.stringify([...next]));
+      return next;
+    });
+  }, []);
+
+  // Theme
+  const [theme, setTheme] = useState(() => localStorage.getItem("theme") || "dark");
+  useEffect(() => {
+    document.documentElement.className = theme;
+    localStorage.setItem("theme", theme);
+  }, [theme]);
+  const toggleTheme = useCallback(() => setTheme((t) => t === "dark" ? "light" : "dark"), []);
 
   const [actionLoading, setActionLoading] = useState(null);
   const [pollingInterval, setPollingInterval] = useState(30);
@@ -203,7 +267,7 @@ export default function App() {
 
   const intervalMs = pollingInterval * 1000;
 
-  const { logs: apiLogs, loading: logsLoading, error: logsError, refresh: refreshLogs, lastUpdated: logsLastUpdated } = useUiPathLogs({ top: logPageSize, interval: intervalMs });
+  const { logs: apiLogs, loading: logsLoading, error: logsError, refresh: refreshLogs, lastUpdated: logsLastUpdated } = useUiPathLogs({ top: 50, interval: intervalMs });
   const todayFilter = `CreationTime ge ${new Date().toISOString().split("T")[0]}T00:00:00Z`;
   const { jobs: apiJobs, loading: jobsLoading, refresh: refreshJobs, lastUpdated: jobsLastUpdated } = useUiPathJobs({ top: 200, filter: todayFilter, interval: intervalMs });
   const { processes: apiReleases, loading: processesLoading, refresh: refreshProcesses } = useUiPathProcesses(intervalMs);
@@ -516,11 +580,13 @@ export default function App() {
   return (
     <div className="min-h-screen hud-grid scanline">
       <Sidebar activePage={activePage} onNavigate={(id) => {
-        const routes = { dashboard: "/", robots: "/robots", logs: "/history", triggers: "/triggers", settings: "/settings" };
+        const routes = { dashboard: "/", robots: "/robots", logs: "/history", triggers: "/triggers", users: "/users", settings: "/settings" };
         navigate(routes[id] || "/");
-      }} collapsed={sidebarCollapsed} onToggle={toggleSidebar} />
+        if (isMobile) setMobileMenuOpen(false);
+      }} collapsed={isMobile ? false : sidebarCollapsed} onToggle={toggleSidebar} userRole={user.role}
+        isMobile={isMobile} mobileOpen={mobileMenuOpen} onMobileClose={() => setMobileMenuOpen(false)} />
 
-      <main className={`p-8 transition-all duration-300 ${sidebarCollapsed ? "ml-16" : "ml-64"}`}>
+      <main className={`p-4 md:p-8 transition-all duration-300 ${isMobile ? "ml-0" : sidebarCollapsed ? "ml-16" : "ml-64"}`}>
         <Header
           title={page.title}
           subtitle={subtitle}
@@ -534,6 +600,13 @@ export default function App() {
           onDismissNotification={dismissNotification}
           onClearNotifications={clearAllNotifications}
           lastUpdated={lastUpdated}
+          user={user}
+          onLogout={onLogout}
+          onChangePassword={() => setShowChangePassword(true)}
+          theme={theme}
+          onToggleTheme={toggleTheme}
+          isMobile={isMobile}
+          onMenuToggle={() => setMobileMenuOpen((o) => !o)}
         />
 
         <Routes>
@@ -545,7 +618,7 @@ export default function App() {
                   <h2 className="text-sm font-semibold text-white">Visão dos Robôs</h2>
                 </div>
                 <div className="grid grid-cols-1 lg:grid-cols-2 xl:grid-cols-3 gap-4">
-                  {filteredRobots.map((robot, i) => (
+                  {[...filteredRobots].sort((a, b) => (favorites.has(b.processKey) ? 1 : 0) - (favorites.has(a.processKey) ? 1 : 0)).map((robot, i) => (
                     <RobotCard
                       key={robot.id}
                       robot={robot}
@@ -554,6 +627,9 @@ export default function App() {
                       onArchive={handleArchive}
                       onClick={() => handleRobotClick(robot.id)}
                       loading={actionLoading === robot.id}
+                      userRole={user.role}
+                      isFavorite={favorites.has(robot.processKey)}
+                      onToggleFavorite={toggleFavorite}
                     />
                   ))}
                   {filteredRobots.length === 0 && !logsLoading && (
@@ -571,14 +647,20 @@ export default function App() {
               robots={filteredRobots}
               onAction={handleAction}
               searchTerm={searchTerm}
+              userRole={user.role}
             />
           } />
           <Route path="/history" element={
             <LogsPage robots={robots} searchTerm={searchTerm} />
           } />
           <Route path="/triggers" element={
-            <TriggersPage addToast={addToast} />
+            <TriggersPage addToast={addToast} userRole={user.role} />
           } />
+          {user.role === "admin" && (
+            <Route path="/users" element={
+              <UsersPage addToast={addToast} />
+            } />
+          )}
           <Route path="/settings" element={
             <SettingsPage
               pollingInterval={pollingInterval}
@@ -622,6 +704,12 @@ export default function App() {
       />
 
       <Toast toasts={toasts} onDismiss={removeToast} />
+
+      <ChangePasswordModal
+        open={showChangePassword}
+        onClose={() => setShowChangePassword(false)}
+        onSuccess={(msg) => addToast("success", msg)}
+      />
     </div>
   );
 }
