@@ -15,6 +15,7 @@ import {
 import { motion } from "motion/react";
 import { fetchJobs, fetchLogs } from "../../services/api";
 import DatePicker from "../DatePicker";
+import ExpandableLog from "../ExpandableLog";
 
 const stateConfig = {
   Successful: { icon: CheckCircle2, color: "text-status-running", bg: "bg-status-running/15", label: "Concluído" },
@@ -325,9 +326,10 @@ export default function LogsPage({ robots, searchTerm: externalSearch }) {
                             <span className={`text-[9px] font-mono px-1.5 py-0.5 rounded shrink-0 ${levelBg} ${levelColor}`}>
                               {log.Level}
                             </span>
-                            <span className="font-mono text-xs text-white/50 flex-1 truncate">
-                              {log.Message}
-                            </span>
+                            <ExpandableLog
+                              message={log.Message}
+                              className="font-mono text-xs text-white/50 flex-1"
+                            />
                             <span className="font-mono text-[10px] text-white/20 shrink-0">
                               {formatTime(log.TimeStamp)}
                             </span>

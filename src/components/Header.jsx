@@ -2,6 +2,7 @@ import { useState, useRef, useEffect, useMemo } from "react";
 import { createPortal } from "react-dom";
 import { Search, Bell, RefreshCw, Loader2, XCircle, AlertTriangle, X, LogOut, Lock, ChevronDown, Sun, Moon, Menu } from "lucide-react";
 import { motion } from "motion/react";
+import ExpandableLog from "./ExpandableLog";
 
 function formatTimeAgo(ts) {
   if (!ts) return "";
@@ -12,7 +13,7 @@ function formatTimeAgo(ts) {
   return `${Math.floor(diff / 86400)}d`;
 }
 
-export default function Header({ title, subtitle, loading, onRefresh, searchTerm, onSearchChange, notifications = [], onDismissNotification, onClearNotifications, lastUpdated, user, onLogout, onChangePassword, theme, onToggleTheme, isMobile, onMenuToggle }) {
+export default function Header({ title, subtitle, loading, onRefresh, searchTerm, onSearchChange, notifications = [], onDismissNotification, onClearNotifications, onNotificationClick, lastUpdated, user, onLogout, onChangePassword, theme, onToggleTheme, isMobile, onMenuToggle }) {
   const [showNotifications, setShowNotifications] = useState(false);
   const [showUserMenu, setShowUserMenu] = useState(false);
   const [tick, setTick] = useState(0);
@@ -81,32 +82,52 @@ export default function Header({ title, subtitle, loading, onRefresh, searchTerm
             Nenhuma notificação
           </div>
         )}
-        {notifications.map((notif) => (
-          <div key={notif.id} className="px-4 py-3 hover:bg-white/[0.02] transition-colors group">
-            <div className="flex items-start gap-3">
-              {notif.type === "error" ? (
-                <XCircle className="w-4 h-4 text-status-error shrink-0 mt-0.5" />
-              ) : (
-                <AlertTriangle className="w-4 h-4 text-status-paused shrink-0 mt-0.5" />
-              )}
-              <div className="flex-1 min-w-0">
-                <p className="text-xs font-medium text-white/80">{notif.title}</p>
-                <p className="text-[11px] text-white/30 font-mono mt-0.5 truncate">{notif.detail}</p>
-              </div>
-              <div className="flex items-center gap-2 shrink-0">
-                <span className="text-[10px] text-white/20 font-mono">
-                  {formatTimeAgo(notif.timestamp)}
-                </span>
-                <button
-                  onClick={(e) => { e.stopPropagation(); onDismissNotification?.(notif.id); }}
-                  className="opacity-0 group-hover:opacity-100 w-5 h-5 rounded flex items-center justify-center text-white/20 hover:text-white/60 hover:bg-white/5 transition-all cursor-pointer"
-                >
-                  <X className="w-3 h-3" />
-                </button>
+        {notifications.map((notif) => {
+          const isClickable = !!notif.robotId;
+          return (
+            <div
+              key={notif.id}
+              onClick={() => {
+                if (isClickable) {
+                  onNotificationClick?.(notif);
+                  setShowNotifications(false);
+                }
+              }}
+              className={`px-4 py-3 hover:bg-white/[0.02] transition-colors group ${isClickable ? "cursor-pointer" : ""}`}
+            >
+              <div className="flex items-start gap-3">
+                {notif.type === "error" ? (
+                  <XCircle className="w-4 h-4 text-status-error shrink-0 mt-0.5" />
+                ) : (
+                  <AlertTriangle className="w-4 h-4 text-status-paused shrink-0 mt-0.5" />
+                )}
+                <div className="flex-1 min-w-0">
+                  <div className="flex items-center gap-2">
+                    <p className="text-xs font-medium text-white/80">{notif.title}</p>
+                    {isClickable && (
+                      <span className="text-[9px] font-mono text-accent/50">VER LOGS</span>
+                    )}
+                  </div>
+                  <ExpandableLog
+                    message={notif.detail}
+                    className="text-[11px] text-white/30 font-mono mt-0.5 block"
+                  />
+                </div>
+                <div className="flex items-center gap-2 shrink-0">
+                  <span className="text-[10px] text-white/20 font-mono">
+                    {formatTimeAgo(notif.timestamp)}
+                  </span>
+                  <button
+                    onClick={(e) => { e.stopPropagation(); onDismissNotification?.(notif.id); }}
+                    className="opacity-0 group-hover:opacity-100 w-5 h-5 rounded flex items-center justify-center text-white/20 hover:text-white/60 hover:bg-white/5 transition-all cursor-pointer"
+                  >
+                    <X className="w-3 h-3" />
+                  </button>
+                </div>
               </div>
             </div>
-          </div>
-        ))}
+          );
+        })}
       </div>
     </div>,
     document.body

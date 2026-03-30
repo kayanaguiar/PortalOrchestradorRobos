@@ -13,6 +13,7 @@ import {
   Star,
 } from "lucide-react";
 import { motion } from "motion/react";
+import ExpandableLog from "./ExpandableLog";
 
 const statusConfig = {
   running: {
@@ -152,17 +153,16 @@ export default function RobotCard({ robot, index, onAction, onArchive, onClick, 
               </span>
             )}
           </div>
-          <p
-            className={`font-mono text-xs ${
+          <ExpandableLog
+            message={robot.lastLog?.Message ?? "Sem logs disponíveis"}
+            className={`font-mono text-xs block ${
               robot.lastLog?.Level === "Error"
                 ? "text-status-error"
                 : robot.lastLog?.Level === "Warn"
                   ? "text-status-paused"
                   : "text-white/70"
-            } truncate`}
-          >
-            {robot.lastLog?.Message ?? "Sem logs disponíveis"}
-          </p>
+            }`}
+          />
         </div>
 
         {/* Metrics row */}

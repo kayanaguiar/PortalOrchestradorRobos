@@ -1,4 +1,4 @@
-import { useState, useEffect, useMemo, useCallback } from "react";
+import { useState, useEffect, useMemo, useCallback, useRef } from "react";
 import { useSearchParams } from "react-router-dom";
 import {
   Monitor,
@@ -22,6 +22,7 @@ import { motion } from "motion/react";
 import { fetchLogs, fetchJobs, fetchPackages, fetchOrchestrators, createRelease } from "../../services/api";
 import DatePicker from "../DatePicker";
 import CustomSelect from "../CustomSelect";
+import ExpandableLog from "../ExpandableLog";
 import { createPortal } from "react-dom";
 
 const statusConfig = {
@@ -77,7 +78,7 @@ function formatDateTime(ts) {
   return `${formatDate(ts)} ${formatTime(ts)}`;
 }
 
-export default function RobotsPage({ robots, onAction, searchTerm: externalSearch }) {
+export default function RobotsPage({ robots, onAction, searchTerm: externalSearch, pollingInterval = 30 }) {
   const [searchParams, setSearchParams] = useSearchParams();
   const [selectedRobotId, setSelectedRobotId] = useState(searchParams.get("selected") || null);
   const [robotJobs, setRobotJobs] = useState([]);
@@ -87,27 +88,60 @@ export default function RobotsPage({ robots, onAction, searchTerm: externalSearc
   const [jobLogsLoading, setJobLogsLoading] = useState(null);
   const [dateFilter, setDateFilter] = useState(new Date().toISOString().split("T")[0]);
   const [logSearchTerm, setLogSearchTerm] = useState("");
+  const pollingRef = useRef(null);
+  const expandedJobKeyRef = useRef(expandedJobKey);
+  expandedJobKeyRef.current = expandedJobKey;
+  const jobLogsRef = useRef(jobLogs);
+  jobLogsRef.current = jobLogs;
 
   const selectedRobot = robots.find((r) => r.id === selectedRobotId);
 
-  // Busca só os Jobs ao selecionar robô ou mudar data (leve)
-  useEffect(() => {
-    if (!selectedRobot) {
-      setRobotJobs([]);
-      return;
+  // Busca jobs e mantém polling automático
+  const fetchJobsForRobot = useCallback((isInitial = false) => {
+    if (!selectedRobot) return;
+    if (isInitial) {
+      setJobsLoading(true);
+      setExpandedJobKey(null);
+      setJobLogs({});
     }
-
-    setJobsLoading(true);
-    setExpandedJobKey(null);
-    setJobLogs({});
     const dayStart = `${dateFilter}T00:00:00Z`;
     const dayEnd = `${dateFilter}T23:59:59Z`;
     const jobsFilter = `ReleaseName eq '${selectedRobot.name}' and CreationTime ge ${dayStart} and CreationTime le ${dayEnd}`;
     fetchJobs({ top: 200, filter: jobsFilter })
-      .then((data) => setRobotJobs(data.value || []))
+      .then((data) => {
+        setRobotJobs(data.value || []);
+        // Atualiza logs do job expandido se houver
+        const currentExpanded = expandedJobKeyRef.current;
+        if (!isInitial && currentExpanded && jobLogsRef.current[currentExpanded]) {
+          const jobDate = dateFilter;
+          const logDayStart = `${jobDate}T00:00:00Z`;
+          const logDayEnd = `${jobDate}T23:59:59Z`;
+          const filter = `ProcessName eq '${selectedRobot.name}' and TimeStamp ge ${logDayStart} and TimeStamp le ${logDayEnd}`;
+          fetchLogs({ top: 500, filter, orderby: "TimeStamp desc", orchestratorId: selectedRobot.orchestratorId })
+            .then((logData) => {
+              const allLogs = logData.value || [];
+              const filtered = allLogs
+                .filter((log) => log.JobKey === currentExpanded)
+                .sort((a, b) => new Date(a.TimeStamp) - new Date(b.TimeStamp));
+              setJobLogs((prev) => ({ ...prev, [currentExpanded]: filtered }));
+            })
+            .catch(() => {});
+        }
+      })
       .catch(() => setRobotJobs([]))
-      .finally(() => setJobsLoading(false));
-  }, [selectedRobot?.id, selectedRobot?.name, dateFilter]);
+      .finally(() => { if (isInitial) setJobsLoading(false); });
+  }, [selectedRobot?.id, selectedRobot?.name, selectedRobot?.orchestratorId, dateFilter]);
+
+  useEffect(() => {
+    if (!selectedRobot) {
+      setRobotJobs([]);
+      clearInterval(pollingRef.current);
+      return;
+    }
+    fetchJobsForRobot(true);
+    pollingRef.current = setInterval(() => fetchJobsForRobot(false), pollingInterval * 1000);
+    return () => clearInterval(pollingRef.current);
+  }, [selectedRobot?.id, dateFilter, fetchJobsForRobot, pollingInterval]);
 
   // Execuções derivadas dos Jobs (sem precisar de logs)
   const executions = useMemo(() => {
@@ -374,9 +408,10 @@ export default function RobotsPage({ robots, onAction, searchTerm: externalSearc
                         <span className={`text-[9px] font-mono px-1.5 py-0.5 rounded shrink-0 ${levelBg[log.Level] || levelBg.Info} ${levelColors[log.Level] || levelColors.Info}`}>
                           {log.Level}
                         </span>
-                        <span className="font-mono text-xs text-white/50 flex-1 truncate">
-                          {log.Message}
-                        </span>
+                        <ExpandableLog
+                          message={log.Message}
+                          className="font-mono text-xs text-white/50 flex-1"
+                        />
                         <span className="font-mono text-[10px] text-white/20 shrink-0">
                           {formatTime(log.TimeStamp)}
                         </span>

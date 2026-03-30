@@ -6,6 +6,7 @@ import {
   Clock,
 } from "lucide-react";
 import { motion } from "motion/react";
+import ExpandableLog from "./ExpandableLog";
 
 const levelConfig = {
   Info: { icon: CheckCircle2, color: "text-status-running" },
@@ -70,9 +71,10 @@ export default function ActivityTable({ logs, pageSize, onPageSizeChange }) {
                     {log.Level.toUpperCase()}
                   </span>
                 </div>
-                <p className="text-[11px] text-white/25 mt-0.5 truncate font-mono">
-                  {log.Message}
-                </p>
+                <ExpandableLog
+                  message={log.Message}
+                  className="text-[11px] text-white/25 mt-0.5 block font-mono"
+                />
               </div>
               <span className="font-mono text-[11px] text-white/20 shrink-0">
                 {formatTime(log.Timestamp)}

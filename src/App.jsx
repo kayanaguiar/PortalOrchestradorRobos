@@ -3,7 +3,7 @@ import { Routes, Route, useNavigate, useLocation } from "react-router-dom";
 import Sidebar from "./components/Sidebar";
 import Header from "./components/Header";
 import StatsPanel from "./components/StatsPanel";
-import RobotCard from "./components/RobotCard";
+import SortableRobotCard from "./components/SortableRobotCard";
 import ActivityTable from "./components/ActivityTable";
 import RobotsPage from "./components/pages/RobotsPage";
 import LogsPage from "./components/pages/LogsPage";
@@ -17,6 +17,8 @@ import ConfirmModal from "./components/ConfirmModal";
 import Toast from "./components/Toast";
 import { startJob, stopJob, fetchSettings, fetchProcessVersions, updateProcessVersion, fetchProcessUpdates, fetchArchivedProcesses, toggleArchivedProcess, login, logout, getStoredUser } from "./services/api";
 import LoginPage from "./components/pages/LoginPage";
+import { DndContext, closestCenter, PointerSensor, TouchSensor, useSensor, useSensors } from "@dnd-kit/core";
+import { SortableContext, rectSortingStrategy, arrayMove } from "@dnd-kit/sortable";
 
 const pageConfig = {
   "/": { id: "dashboard", title: "Dashboard", subtitle: "VISÃO GERAL" },
@@ -233,6 +235,7 @@ function AuthenticatedApp({ user, onLogout }) {
   const [logPageSize, setLogPageSize] = useState(5);
   const [searchTerm, setSearchTerm] = useState("");
   const [dismissedNotifications, setDismissedNotifications] = useState(new Set());
+  const [accumulatedNotifications, setAccumulatedNotifications] = useState([]);
   const [archivedProcesses, setArchivedProcesses] = useState(new Set());
 
   // Carrega processos arquivados
@@ -241,6 +244,16 @@ function AuthenticatedApp({ user, onLogout }) {
       .then((data) => setArchivedProcesses(new Set(data.value || [])))
       .catch(() => {});
   }, []);
+  // Card order (drag-and-drop)
+  const [cardOrder, setCardOrder] = useState(() => {
+    try { return JSON.parse(localStorage.getItem("cardOrder") || "[]"); }
+    catch { return []; }
+  });
+  const dndSensors = useSensors(
+    useSensor(PointerSensor, { activationConstraint: { distance: 8 } }),
+    useSensor(TouchSensor, { activationConstraint: { delay: 200, tolerance: 5 } }),
+  );
+
   const [pendingAction, setPendingAction] = useState(null);
   const [toasts, setToasts] = useState([]);
 
@@ -276,9 +289,7 @@ function AuthenticatedApp({ user, onLogout }) {
 
   // Updates de versão em background (roda só uma vez quando conecta)
   const [processUpdates, setProcessUpdates] = useState({});
-  const [updatesLoaded, setUpdatesLoaded] = useState(false);
-  useEffect(() => {
-    if (!connected || updatesLoaded) return;
+  const refreshProcessUpdates = useCallback(() => {
     fetchProcessUpdates()
       .then((data) => {
         const map = {};
@@ -286,10 +297,18 @@ function AuthenticatedApp({ user, onLogout }) {
           map[item.name] = item;
         }
         setProcessUpdates(map);
-        setUpdatesLoaded(true);
       })
       .catch(() => {});
-  }, [connected, updatesLoaded]);
+  }, []);
+
+  // Busca updates na primeira conexão e a cada 60s
+  const updatesTimerRef = useRef(null);
+  useEffect(() => {
+    if (!connected) return;
+    refreshProcessUpdates();
+    updatesTimerRef.current = setInterval(refreshProcessUpdates, 60000);
+    return () => clearInterval(updatesTimerRef.current);
+  }, [connected, refreshProcessUpdates]);
 
   const lastUpdated = useMemo(() => {
     const times = [logsLastUpdated, jobsLastUpdated].filter(Boolean);
@@ -333,6 +352,34 @@ function AuthenticatedApp({ user, onLogout }) {
       : visibleRobots,
     [visibleRobots, search]
   );
+
+  // Ordena cards: usa ordem salva (drag) se existir, senão favoritos primeiro
+  const sortedRobots = useMemo(() => {
+    const list = [...filteredRobots];
+    if (cardOrder.length > 0) {
+      const orderMap = new Map(cardOrder.map((key, i) => [key, i]));
+      list.sort((a, b) => {
+        const ia = orderMap.has(a.processKey) ? orderMap.get(a.processKey) : Infinity;
+        const ib = orderMap.has(b.processKey) ? orderMap.get(b.processKey) : Infinity;
+        return ia - ib;
+      });
+    } else {
+      list.sort((a, b) => (favorites.has(b.processKey) ? 1 : 0) - (favorites.has(a.processKey) ? 1 : 0));
+    }
+    return list;
+  }, [filteredRobots, cardOrder, favorites]);
+
+  const handleDragEnd = useCallback((event) => {
+    const { active, over } = event;
+    if (!over || active.id === over.id) return;
+    const keys = sortedRobots.map((r) => r.processKey);
+    const oldIndex = keys.indexOf(active.id);
+    const newIndex = keys.indexOf(over.id);
+    if (oldIndex === -1 || newIndex === -1) return;
+    const newOrder = arrayMove(keys, oldIndex, newIndex);
+    setCardOrder(newOrder);
+    localStorage.setItem("cardOrder", JSON.stringify(newOrder));
+  }, [sortedRobots]);
 
   const filteredLogs = useMemo(
     () => search
@@ -381,6 +428,7 @@ function AuthenticatedApp({ user, onLogout }) {
           break;
       }
       await Promise.all([refreshJobs(), refreshLogs(), refreshProcesses()]);
+      refreshProcessUpdates();
       const messages = {
         start: `Job "${robot.name}" iniciado com sucesso`,
         restart: `Job "${robot.name}" reiniciado com sucesso`,
@@ -448,13 +496,19 @@ function AuthenticatedApp({ user, onLogout }) {
     setPendingAction(null);
   }, []);
 
-  const refreshAll = useCallback(() => {
-    refreshLogs();
-    refreshJobs();
-    refreshProcesses();
-    refreshSessions();
-    refreshHealth();
-  }, [refreshLogs, refreshJobs, refreshProcesses, refreshSessions, refreshHealth]);
+  const [refreshing, setRefreshing] = useState(false);
+  const refreshAll = useCallback(async () => {
+    setRefreshing(true);
+    try {
+      await Promise.all([refreshLogs(), refreshJobs(), refreshProcesses(), refreshSessions(), refreshHealth()]);
+      refreshProcessUpdates();
+      addToast("success", "Dados atualizados");
+    } catch {
+      addToast("error", "Erro ao atualizar");
+    } finally {
+      setRefreshing(false);
+    }
+  }, [refreshLogs, refreshJobs, refreshProcesses, refreshSessions, refreshHealth, refreshProcessUpdates, addToast]);
 
   const now = new Date();
   const dateStr = now.toLocaleDateString("pt-BR", {
@@ -464,55 +518,95 @@ function AuthenticatedApp({ user, onLogout }) {
     year: "numeric",
   });
 
-  // Notificações
-  const allNotifications = useMemo(() => {
-    const items = [];
+  // Notificações — acumula ao longo da sessão
+  useEffect(() => {
+    setAccumulatedNotifications((prev) => {
+      const existingIds = new Set(prev.map((n) => n.id));
+      const newItems = [];
 
-    // Jobs com erro hoje
-    const faultedJobs = apiJobs.filter((j) => j.State === "Faulted");
-    for (const job of faultedJobs) {
-      items.push({
-        id: `faulted-${job.Id}`,
-        type: "error",
-        title: `Job falhou: ${job.ReleaseName}`,
-        detail: job.Info || "Erro na execução",
-        machine: job.HostMachineName || "",
-        timestamp: job.EndTime || job.CreationTime,
-      });
-    }
+      // Jobs com erro hoje
+      for (const job of apiJobs) {
+        if (job.State === "Faulted") {
+          const id = `faulted-${job.Id}`;
+          if (!existingIds.has(id)) {
+            const matchedRobot = robots.find((r) => r.name === job.ReleaseName && r.orchestratorId === job._orchestratorId)
+              || robots.find((r) => r.name === job.ReleaseName);
+            newItems.push({
+              id,
+              type: "error",
+              title: `Job falhou: ${job.ReleaseName}`,
+              detail: job.Info || "Erro na execução",
+              machine: job.HostMachineName || "",
+              timestamp: job.EndTime || job.CreationTime,
+              robotId: matchedRobot?.id || null,
+            });
+          }
+        }
+      }
 
-    // Assistants que ficaram offline (detectados pelo backend)
-    for (const assistant of recentlyOffline) {
-      const perfil = assistant.machineName || assistant.hostMachineName;
-      items.push({
-        id: `assistant-offline-${assistant.id}`,
-        type: "warning",
-        title: `Assistant offline: ${perfil}`,
-        detail: `Perfil: ${perfil} — saiu do ar`,
-        timestamp: new Date().toISOString(),
-      });
-    }
+      // Assistants que ficaram offline
+      for (const assistant of recentlyOffline) {
+        const perfil = assistant.machineName || assistant.hostMachineName;
+        const id = `assistant-offline-${assistant.id}`;
+        if (!existingIds.has(id)) {
+          newItems.push({
+            id,
+            type: "warning",
+            title: `Assistant offline: ${perfil}`,
+            detail: `Perfil: ${perfil} — saiu do ar`,
+            timestamp: new Date().toISOString(),
+          });
+        }
+      }
 
-    // Orchestrators desconectados
-    for (const orch of orchestratorStatuses) {
-      if (!orch.connected) {
-        items.push({
-          id: `orch-${orch.id}`,
-          type: "error",
-          title: `Orchestrator desconectado: ${orch.name}`,
-          detail: orch.error || "Falha na conexão",
-          timestamp: new Date().toISOString(),
+      // Orchestrators desconectados — atualiza estado (adiciona/remove)
+      const orchIds = new Set();
+      for (const orch of orchestratorStatuses) {
+        if (!orch.connected) {
+          const id = `orch-${orch.id}`;
+          orchIds.add(id);
+          if (!existingIds.has(id)) {
+            newItems.push({
+              id,
+              type: "error",
+              title: `Orchestrator desconectado: ${orch.name}`,
+              detail: orch.error || "Falha na conexão",
+              timestamp: new Date().toISOString(),
+            });
+          }
+        }
+      }
+
+      // Remove notificações de orchestrators que reconectaram
+      let filtered = prev.filter((n) => !n.id.startsWith("orch-") || orchIds.has(n.id));
+
+      // Enriquece notificações de jobs que ainda não têm robotId
+      let enriched = false;
+      if (robots.length > 0) {
+        filtered = filtered.map((n) => {
+          if (n.id.startsWith("faulted-") && !n.robotId) {
+            const releaseName = n.title.replace("Job falhou: ", "");
+            const match = robots.find((r) => r.name === releaseName);
+            if (match) {
+              enriched = true;
+              return { ...n, robotId: match.id };
+            }
+          }
+          return n;
         });
       }
-    }
 
-    items.sort((a, b) => new Date(b.timestamp) - new Date(a.timestamp));
-    return items;
-  }, [apiJobs, recentlyOffline, orchestratorStatuses]);
+      if (newItems.length === 0 && filtered.length === prev.length && !enriched) return prev;
+
+      const merged = [...filtered, ...newItems];
+      merged.sort((a, b) => new Date(b.timestamp) - new Date(a.timestamp));
+      return merged;
+    });
+  }, [apiJobs, recentlyOffline, orchestratorStatuses, robots]);
 
   const notifications = useMemo(
-    () => allNotifications.filter((n) => !dismissedNotifications.has(n.id)),
-    [allNotifications, dismissedNotifications]
+    () => accumulatedNotifications.filter((n) => !dismissedNotifications.has(n.id)),
+    [accumulatedNotifications, dismissedNotifications]
   );
 
   const dismissNotification = useCallback((id) => {
@@ -520,8 +614,14 @@ function AuthenticatedApp({ user, onLogout }) {
   }, []);
 
   const clearAllNotifications = useCallback(() => {
-    setDismissedNotifications(new Set(allNotifications.map((n) => n.id)));
-  }, [allNotifications]);
+    setDismissedNotifications(new Set(accumulatedNotifications.map((n) => n.id)));
+  }, [accumulatedNotifications]);
+
+  const handleNotificationClick = useCallback((notif) => {
+    if (notif.robotId) {
+      navigate(`/robots?selected=${notif.robotId}`);
+    }
+  }, [navigate]);
 
   const subtitle = activePage === "dashboard" ? dateStr.toUpperCase() : page.subtitle;
 
@@ -592,13 +692,14 @@ function AuthenticatedApp({ user, onLogout }) {
           subtitle={subtitle}
           connected={connected}
           healthLoading={healthLoading}
-          loading={logsLoading}
+          loading={logsLoading || refreshing}
           onRefresh={refreshAll}
           searchTerm={searchTerm}
           onSearchChange={setSearchTerm}
           notifications={notifications}
           onDismissNotification={dismissNotification}
           onClearNotifications={clearAllNotifications}
+          onNotificationClick={handleNotificationClick}
           lastUpdated={lastUpdated}
           user={user}
           onLogout={onLogout}
@@ -617,27 +718,31 @@ function AuthenticatedApp({ user, onLogout }) {
                 <div className="flex items-center justify-between mb-4">
                   <h2 className="text-sm font-semibold text-white">Visão dos Robôs</h2>
                 </div>
-                <div className="grid grid-cols-1 lg:grid-cols-2 xl:grid-cols-3 gap-4">
-                  {[...filteredRobots].sort((a, b) => (favorites.has(b.processKey) ? 1 : 0) - (favorites.has(a.processKey) ? 1 : 0)).map((robot, i) => (
-                    <RobotCard
-                      key={robot.id}
-                      robot={robot}
-                      index={i}
-                      onAction={handleAction}
-                      onArchive={handleArchive}
-                      onClick={() => handleRobotClick(robot.id)}
-                      loading={actionLoading === robot.id}
-                      userRole={user.role}
-                      isFavorite={favorites.has(robot.processKey)}
-                      onToggleFavorite={toggleFavorite}
-                    />
-                  ))}
-                  {filteredRobots.length === 0 && !logsLoading && (
-                    <div className="col-span-full text-center py-12 text-white/20 text-sm font-mono">
-                      {search ? "Nenhum robô encontrado para essa busca." : "Nenhum job encontrado. Verifique as configurações dos Orchestrators."}
+                <DndContext sensors={dndSensors} collisionDetection={closestCenter} onDragEnd={handleDragEnd}>
+                  <SortableContext items={sortedRobots.map((r) => r.processKey)} strategy={rectSortingStrategy}>
+                    <div className="grid grid-cols-1 lg:grid-cols-2 xl:grid-cols-3 gap-4">
+                      {sortedRobots.map((robot, i) => (
+                        <SortableRobotCard
+                          key={robot.id}
+                          robot={robot}
+                          index={i}
+                          onAction={handleAction}
+                          onArchive={handleArchive}
+                          onClick={() => handleRobotClick(robot.id)}
+                          loading={actionLoading === robot.id}
+                          userRole={user.role}
+                          isFavorite={favorites.has(robot.processKey)}
+                          onToggleFavorite={toggleFavorite}
+                        />
+                      ))}
+                      {filteredRobots.length === 0 && !logsLoading && (
+                        <div className="col-span-full text-center py-12 text-white/20 text-sm font-mono">
+                          {search ? "Nenhum robô encontrado para essa busca." : "Nenhum job encontrado. Verifique as configurações dos Orchestrators."}
+                        </div>
+                      )}
                     </div>
-                  )}
-                </div>
+                  </SortableContext>
+                </DndContext>
               </div>
               <ActivityTable logs={filteredLogs} pageSize={logPageSize} onPageSizeChange={setLogPageSize} />
             </div>
@@ -648,6 +753,7 @@ function AuthenticatedApp({ user, onLogout }) {
               onAction={handleAction}
               searchTerm={searchTerm}
               userRole={user.role}
+              pollingInterval={pollingInterval}
             />
           } />
           <Route path="/history" element={
