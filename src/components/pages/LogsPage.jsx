@@ -16,6 +16,7 @@ import { motion } from "motion/react";
 import { fetchJobs, fetchLogs } from "../../services/api";
 import DatePicker from "../DatePicker";
 import ExpandableLog from "../ExpandableLog";
+import CustomSelect from "../CustomSelect";
 
 const stateConfig = {
   Successful: { icon: CheckCircle2, color: "text-status-running", bg: "bg-status-running/15", label: "Concluído" },
@@ -152,7 +153,7 @@ export default function LogsPage({ robots, searchTerm: externalSearch }) {
   return (
     <div className="space-y-6">
       {/* Counters */}
-      <div className="grid grid-cols-5 gap-4">
+      <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-3 sm:gap-4">
         {[
           { label: "Total Jobs", value: counts.total, color: "text-accent" },
           { label: "Concluídos", value: counts.successful, color: "text-status-running" },
@@ -165,7 +166,7 @@ export default function LogsPage({ robots, searchTerm: externalSearch }) {
             initial={{ opacity: 0, y: 15 }}
             animate={{ opacity: 1, y: 0 }}
             transition={{ delay: i * 0.08 }}
-            className="rounded-xl border border-white/5 bg-surface-800/60 p-4"
+            className="rounded-xl border border-white/5 bg-surface-800/60 p-3 sm:p-4"
           >
             <p className="text-[10px] uppercase tracking-wider text-white/30 mb-1">{item.label}</p>
             <p className={`font-mono text-2xl font-bold ${item.color}`}>{item.value}</p>
@@ -174,9 +175,9 @@ export default function LogsPage({ robots, searchTerm: externalSearch }) {
       </div>
 
       {/* Filters */}
-      <div className="flex items-center gap-3 flex-wrap">
+      <div className="flex items-stretch sm:items-center gap-2 sm:gap-3 flex-col sm:flex-row sm:flex-wrap">
         {/* Search */}
-        <div className="relative flex-1 max-w-md">
+        <div className="relative flex-1 sm:max-w-md w-full">
           <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-white/20" />
           <input
             type="text"
@@ -191,33 +192,35 @@ export default function LogsPage({ robots, searchTerm: externalSearch }) {
         <DatePicker value={dateFilter} onChange={setDateFilter} />
 
         {/* Status */}
-        <div className="flex items-center gap-1.5">
-          <Filter className="w-4 h-4 text-white/20" />
-          <select
+        <div className="flex items-center gap-1.5 w-full sm:w-auto">
+          <Filter className="w-4 h-4 text-white/20 shrink-0" />
+          <CustomSelect
             value={statusFilter}
-            onChange={(e) => setStatusFilter(e.target.value)}
-            className="bg-surface-700/50 border border-white/5 rounded-lg px-3 py-2 text-sm text-white/60 focus:outline-none focus:border-accent/30 cursor-pointer"
-          >
-            <option value="all">Todos os status</option>
-            <option value="Successful">Concluído</option>
-            <option value="Faulted">Falhou</option>
-            <option value="Running">Executando</option>
-            <option value="Stopped">Parado</option>
-            <option value="Pending">Pendente</option>
-          </select>
+            onChange={setStatusFilter}
+            placeholder="Filtrar status..."
+            options={[
+              { value: "all", label: "Todos os status" },
+              { value: "Successful", label: "Concluído" },
+              { value: "Faulted", label: "Falhou" },
+              { value: "Running", label: "Executando" },
+              { value: "Stopped", label: "Parado" },
+              { value: "Pending", label: "Pendente" },
+            ]}
+            className="flex-1 sm:flex-none sm:min-w-[12rem]"
+          />
         </div>
 
         {/* Robot */}
-        <select
+        <CustomSelect
           value={robotFilter}
-          onChange={(e) => setRobotFilter(e.target.value)}
-          className="bg-surface-700/50 border border-white/5 rounded-lg px-3 py-2 text-sm text-white/60 focus:outline-none focus:border-accent/30 cursor-pointer"
-        >
-          <option value="all">Todos os robôs</option>
-          {processNames.map((name) => (
-            <option key={name} value={name}>{name}</option>
-          ))}
-        </select>
+          onChange={setRobotFilter}
+          placeholder="Filtrar robô..."
+          options={[
+            { value: "all", label: "Todos os robôs" },
+            ...processNames.map((name) => ({ value: name, label: name })),
+          ]}
+          className="w-full sm:w-auto sm:min-w-[14rem]"
+        />
 
         <span className="font-mono text-[11px] text-white/20">
           {filteredJobs.length} resultado{filteredJobs.length !== 1 ? "s" : ""}
@@ -231,7 +234,7 @@ export default function LogsPage({ robots, searchTerm: externalSearch }) {
         transition={{ delay: 0.2 }}
         className="rounded-xl border border-white/5 bg-surface-800/60 overflow-hidden"
       >
-        <div className="px-5 py-3 border-b border-white/5 grid grid-cols-[20px_100px_1fr_180px_120px_120px_140px] gap-3 text-[10px] uppercase tracking-wider text-white/30 font-mono">
+        <div className="hidden md:grid px-5 py-3 border-b border-white/5 grid-cols-[20px_100px_1fr_180px_120px_120px_140px] gap-3 text-[10px] uppercase tracking-wider text-white/30 font-mono">
           <span></span>
           <span>Status</span>
           <span>Processo</span>
@@ -263,40 +266,59 @@ export default function LogsPage({ robots, searchTerm: externalSearch }) {
                     animate={{ opacity: 1 }}
                     transition={{ delay: Math.min(i * 0.02, 0.4) }}
                     onClick={() => toggleJobLogs(job)}
-                    className="px-5 py-3 grid grid-cols-[20px_100px_1fr_180px_120px_120px_140px] gap-3 items-center hover:bg-white/[0.03] transition-colors cursor-pointer"
+                    className="px-4 sm:px-5 py-3 flex flex-col gap-2 md:grid md:grid-cols-[20px_100px_1fr_180px_120px_120px_140px] md:gap-3 md:items-center hover:bg-white/[0.03] transition-colors cursor-pointer"
                   >
-                    <div className="flex items-center justify-center">
-                      {isExpanded
-                        ? <ChevronDown className="w-3.5 h-3.5 text-white/30" />
-                        : <ChevronRight className="w-3.5 h-3.5 text-white/30" />
-                      }
-                    </div>
-                    <div className="flex items-center gap-1.5">
-                      <Icon className={`w-3.5 h-3.5 ${cfg.color}`} />
-                      <span className={`text-[9px] font-mono px-1.5 py-0.5 rounded ${cfg.bg} ${cfg.color}`}>
-                        {cfg.label.toUpperCase()}
+                    {/* Mobile: linha superior compacta com chevron + status + horário */}
+                    <div className="flex items-center gap-2 md:contents">
+                      <div className="flex items-center justify-center md:justify-self-start">
+                        {isExpanded
+                          ? <ChevronDown className="w-3.5 h-3.5 text-white/30" />
+                          : <ChevronRight className="w-3.5 h-3.5 text-white/30" />
+                        }
+                      </div>
+                      <div className="flex items-center gap-1.5">
+                        <Icon className={`w-3.5 h-3.5 ${cfg.color}`} />
+                        <span className={`text-[9px] font-mono px-1.5 py-0.5 rounded ${cfg.bg} ${cfg.color}`}>
+                          {cfg.label.toUpperCase()}
+                        </span>
+                      </div>
+                      <span className="md:hidden ml-auto font-mono text-[10px] text-white/20">
+                        {formatTime(job.CreationTime)}
                       </span>
                     </div>
-                    <div className="min-w-0">
-                      <span className="text-xs font-medium text-white/70 truncate block">
-                        {job.ReleaseName}
-                      </span>
-                      {job.Info && (
-                        <p className="text-[10px] text-white/20 font-mono truncate mt-0.5">
-                          {job.Info}
-                        </p>
-                      )}
+
+                    {/* Processo */}
+                    <div className="min-w-0 md:contents">
+                      <div className="min-w-0">
+                        <span className="text-xs font-medium text-white/70 truncate block">
+                          {job.ReleaseName}
+                        </span>
+                        {job.Info && (
+                          <p className="text-[10px] text-white/20 font-mono truncate mt-0.5">
+                            {job.Info}
+                          </p>
+                        )}
+                      </div>
                     </div>
-                    <span className="font-mono text-xs text-white/30 truncate">
+
+                    {/* Mobile: meta info em linha */}
+                    <div className="flex items-center gap-3 flex-wrap text-[10px] font-mono text-white/30 md:hidden">
+                      {job.HostMachineName && <span>{job.HostMachineName}</span>}
+                      {job.Source && <span>{job.Source}</span>}
+                      <span>{formatDuration(job.StartTime, job.EndTime)}</span>
+                    </div>
+
+                    {/* Desktop: colunas restantes */}
+                    <span className="hidden md:block font-mono text-xs text-white/30 truncate">
                       {job.HostMachineName || "—"}
                     </span>
-                    <span className="font-mono text-xs text-white/30 truncate">
+                    <span className="hidden md:block font-mono text-xs text-white/30 truncate">
                       {job.Source || "—"}
                     </span>
-                    <span className="font-mono text-xs text-white/30">
+                    <span className="hidden md:block font-mono text-xs text-white/30">
                       {formatDuration(job.StartTime, job.EndTime)}
                     </span>
-                    <span className="font-mono text-[11px] text-white/20 text-right">
+                    <span className="hidden md:block font-mono text-[11px] text-white/20 text-right">
                       {formatDateTime(job.CreationTime)}
                     </span>
                   </motion.div>

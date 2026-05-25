@@ -219,7 +219,7 @@ export default function TriggersPage({ addToast }) {
   return (
     <div className="space-y-6">
       {/* Counters */}
-      <div className="grid grid-cols-3 gap-4">
+      <div className="grid grid-cols-3 gap-3 sm:gap-4">
         {[
           { label: "Total Gatilhos", value: counts.total, color: "text-accent" },
           { label: "Habilitados", value: counts.enabled, color: "text-status-running" },
@@ -230,7 +230,7 @@ export default function TriggersPage({ addToast }) {
             initial={{ opacity: 0, y: 15 }}
             animate={{ opacity: 1, y: 0 }}
             transition={{ delay: i * 0.08 }}
-            className="rounded-xl border border-white/5 bg-surface-800/60 p-4"
+            className="rounded-xl border border-white/5 bg-surface-800/60 p-3 sm:p-4"
           >
             <p className="text-[10px] uppercase tracking-wider text-white/30 mb-1">{item.label}</p>
             <p className={`font-mono text-2xl font-bold ${item.color}`}>{item.value}</p>
@@ -239,9 +239,9 @@ export default function TriggersPage({ addToast }) {
       </div>
 
       {/* Filters */}
-      <div className="flex items-center gap-3 flex-wrap">
+      <div className="flex items-stretch sm:items-center gap-2 sm:gap-3 flex-col sm:flex-row sm:flex-wrap">
         {/* Search */}
-        <div className="relative flex-1 max-w-md">
+        <div className="relative flex-1 sm:max-w-md w-full">
           <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-white/20" />
           <input
             type="text"
@@ -253,30 +253,32 @@ export default function TriggersPage({ addToast }) {
         </div>
 
         {/* Orchestrator filter */}
-        <div className="flex items-center gap-1.5">
-          <Filter className="w-4 h-4 text-white/20" />
-          <select
+        <div className="flex items-center gap-1.5 w-full sm:w-auto">
+          <Filter className="w-4 h-4 text-white/20 shrink-0" />
+          <CustomSelect
             value={orchFilter}
-            onChange={(e) => setOrchFilter(e.target.value)}
-            className="bg-surface-700/50 border border-white/5 rounded-lg px-3 py-2 text-sm text-white/60 focus:outline-none focus:border-accent/30 cursor-pointer"
-          >
-            <option value="all">Todos os orchestrators</option>
-            {orchestratorNames.map(([id, name]) => (
-              <option key={id} value={id}>{name}</option>
-            ))}
-          </select>
+            onChange={setOrchFilter}
+            placeholder="Filtrar orchestrator..."
+            options={[
+              { value: "all", label: "Todos os orchestrators" },
+              ...orchestratorNames.map(([id, name]) => ({ value: id, label: name })),
+            ]}
+            className="flex-1 sm:flex-none sm:min-w-[14rem]"
+          />
         </div>
 
-        <span className="font-mono text-[11px] text-white/20">
-          {filteredTriggers.length} resultado{filteredTriggers.length !== 1 ? "s" : ""}
-        </span>
+        <div className="flex items-center justify-between sm:justify-start sm:ml-auto gap-3">
+          <span className="font-mono text-[11px] text-white/20">
+            {filteredTriggers.length} resultado{filteredTriggers.length !== 1 ? "s" : ""}
+          </span>
 
-        <button
-          onClick={openCreate}
-          className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-accent/30 text-accent text-xs font-medium hover:bg-accent/10 transition-all cursor-pointer ml-auto"
-        >
-          <Timer className="w-3.5 h-3.5" /> Novo Gatilho
-        </button>
+          <button
+            onClick={openCreate}
+            className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-accent/30 text-accent text-xs font-medium hover:bg-accent/10 transition-all cursor-pointer"
+          >
+            <Timer className="w-3.5 h-3.5" /> Novo Gatilho
+          </button>
+        </div>
       </div>
 
       {/* Loading */}
@@ -322,12 +324,12 @@ export default function TriggersPage({ addToast }) {
                   initial={{ opacity: 0 }}
                   animate={{ opacity: 1 }}
                   transition={{ delay: Math.min(i * 0.03, 0.3) }}
-                  className="px-5 py-4 hover:bg-white/[0.02] transition-colors"
+                  className="px-4 sm:px-5 py-4 hover:bg-white/[0.02] transition-colors"
                 >
-                  <div className="flex items-center justify-between gap-4">
+                  <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-3 md:gap-4">
                     {/* Left: name + details */}
                     <div className="min-w-0 flex-1">
-                      <div className="flex items-center gap-2 mb-1">
+                      <div className="flex items-center gap-2 mb-1 flex-wrap">
                         <Timer className="w-4 h-4 text-accent/50 shrink-0" />
                         <span className="text-sm font-medium text-white/80 truncate">
                           {trigger.Name}
@@ -341,7 +343,7 @@ export default function TriggersPage({ addToast }) {
                         </span>
                       </div>
 
-                      <div className="flex items-center gap-4 flex-wrap ml-6">
+                      <div className="flex items-center gap-x-4 gap-y-1 flex-wrap ml-6">
                         {/* Release name */}
                         <span className="text-xs text-white/40 font-mono truncate">
                           {trigger.ReleaseName || "\u2014"}
@@ -373,7 +375,7 @@ export default function TriggersPage({ addToast }) {
                     </div>
 
                     {/* Right: actions */}
-                    <div className="flex items-center gap-2 shrink-0">
+                    <div className="flex items-center gap-2 flex-wrap md:flex-nowrap md:shrink-0">
                       {isToggling && <Loader2 className="w-3.5 h-3.5 animate-spin text-white/30" />}
                       <button
                         onClick={() => openEdit(trigger)}

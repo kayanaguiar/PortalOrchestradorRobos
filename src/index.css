@@ -13,6 +13,7 @@
   --color-status-paused: #ffc107;
   --color-status-stopped: #78909c;
   --color-status-error: #ff1744;
+  --color-status-offline: #a855f7;
   --font-display: "Plus Jakarta Sans", sans-serif;
   --font-mono: "JetBrains Mono", monospace;
 }
@@ -31,6 +32,7 @@ html.light {
   --color-status-paused: #ca8a04;
   --color-status-stopped: #64748b;
   --color-status-error: #dc2626;
+  --color-status-offline: #9333ea;
 }
 
 html.light body {

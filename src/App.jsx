@@ -6,11 +6,11 @@ import StatsPanel from "./components/StatsPanel";
 import SortableRobotCard from "./components/SortableRobotCard";
 import ActivityTable from "./components/ActivityTable";
 import ChangePasswordModal from "./components/ChangePasswordModal";
-import { useUiPathLogs, useUiPathJobs, useUiPathProcesses, useUiPathSessions, useUiPathHealth } from "./hooks/useUiPathData";
+import { useUiPathLogs, useUiPathJobs, useUiPathProcesses, useUiPathSessions, useUiPathHealth, useUiPathTriggers } from "./hooks/useUiPathData";
 import useMediaQuery from "./hooks/useMediaQuery";
 import ConfirmModal from "./components/ConfirmModal";
 import Toast from "./components/Toast";
-import { startJob, stopJob, fetchSettings, fetchProcessVersions, updateProcessVersion, fetchProcessUpdates, fetchArchivedProcesses, toggleArchivedProcess, login, logout, getStoredUser } from "./services/api";
+import { startJob, stopJob, fetchSettings, fetchProcessVersions, updateProcessVersion, fetchProcessUpdates, fetchArchivedProcesses, toggleArchivedProcess, login, logout, getStoredUser, refreshToken } from "./services/api";
 import { DndContext, closestCenter, PointerSensor, TouchSensor, useSensor, useSensors } from "@dnd-kit/core";
 import { SortableContext, rectSortingStrategy, arrayMove } from "@dnd-kit/sortable";
 
@@ -264,6 +264,17 @@ function AuthenticatedApp({ user, onLogout }) {
       .then((data) => setArchivedProcesses(new Set(data.value || [])))
       .catch(() => {});
   }, []);
+
+  // Renova a sessão JWT periodicamente (token expira em 24h; renovamos a cada 12h).
+  // Também tenta renovar uma vez ao montar — útil se o navegador ficou fechado.
+  // Falhou (401) significa que o token expirou de verdade → desloga limpo.
+  useEffect(() => {
+    refreshToken().catch(() => onLogout());
+    const id = setInterval(() => {
+      refreshToken().catch(() => onLogout());
+    }, 12 * 60 * 60 * 1000);
+    return () => clearInterval(id);
+  }, [onLogout]);
   // Card order (drag-and-drop)
   const [cardOrder, setCardOrder] = useState(() => {
     try { return JSON.parse(localStorage.getItem("cardOrder") || "[]"); }
@@ -309,6 +320,7 @@ function AuthenticatedApp({ user, onLogout }) {
   const { jobs: apiJobs, loading: jobsLoading, refresh: refreshJobs, lastUpdated: jobsLastUpdated } = useUiPathJobs({ top: 200, filter: todayFilter, interval: intervalMs });
   const { processes: apiReleases, loading: processesLoading, refresh: refreshProcesses } = useUiPathProcesses(intervalMs);
   const { sessions: apiSessions, recentlyOffline, loading: sessionsLoading, refresh: refreshSessions } = useUiPathSessions(intervalMs);
+  const { autoDisabled: triggersAutoDisabled } = useUiPathTriggers(2 * 60 * 1000);
   const { connected, orchestratorStatuses, loading: healthLoading, refresh: refreshHealth } = useUiPathHealth();
 
   // Updates de versão em background (roda só uma vez quando conecta)
@@ -508,6 +520,10 @@ function AuthenticatedApp({ user, onLogout }) {
   const archivedRef = useRef(archivedProcesses);
   archivedRef.current = archivedProcesses;
 
+  // Contador de falhas consecutivas por orchestrator — evita notificar por
+  // timeout pontual do UiPath. Só notifica após 2 rodadas seguidas com connected:false.
+  const orchFailureCountRef = useRef({});
+
   const handleArchive = useCallback((processKey) => {
     const wasArchived = archivedRef.current.has(processKey);
     const next = new Set(archivedRef.current);
@@ -655,6 +671,21 @@ function AuthenticatedApp({ user, onLogout }) {
         }
       }
 
+      // Gatilhos que o UiPath auto-desabilitou (geralmente: fila estourou)
+      for (const t of triggersAutoDisabled) {
+        const id = `trigger-auto-disabled-${t.orchestratorId}-${t.id}`;
+        if (!existingIds.has(id)) {
+          newItems.push({
+            id,
+            type: "warning",
+            title: `Gatilho desabilitado: ${t.name}`,
+            detail: `${t.orchestratorName} — provavelmente atingiu o limite da fila no UiPath. Verifique antes de reabilitar.`,
+            timestamp: new Date().toISOString(),
+            link: "/triggers",
+          });
+        }
+      }
+
       // Assistants que ficaram offline
       for (const assistant of recentlyOffline) {
         const perfil = assistant.machineName || assistant.hostMachineName;
@@ -670,10 +701,15 @@ function AuthenticatedApp({ user, onLogout }) {
         }
       }
 
-      // Orchestrators desconectados — atualiza estado (adiciona/remove)
+      // Orchestrators desconectados — só notifica após 2 falhas consecutivas
+      // pra ignorar timeout pontual do UiPath. Reseta o contador ao reconectar.
       const orchIds = new Set();
       for (const orch of orchestratorStatuses) {
         if (!orch.connected) {
+          const count = (orchFailureCountRef.current[orch.id] || 0) + 1;
+          orchFailureCountRef.current[orch.id] = count;
+          if (count < 2) continue;
+
           const id = `orch-${orch.id}`;
           orchIds.add(id);
           if (!existingIds.has(id)) {
@@ -685,6 +721,8 @@ function AuthenticatedApp({ user, onLogout }) {
               timestamp: new Date().toISOString(),
             });
           }
+        } else {
+          delete orchFailureCountRef.current[orch.id];
         }
       }
 
@@ -713,7 +751,7 @@ function AuthenticatedApp({ user, onLogout }) {
       merged.sort((a, b) => new Date(b.timestamp) - new Date(a.timestamp));
       return merged;
     });
-  }, [apiJobs, recentlyOffline, orchestratorStatuses, robots]);
+  }, [apiJobs, recentlyOffline, orchestratorStatuses, robots, triggersAutoDisabled]);
 
   const notifications = useMemo(
     () => accumulatedNotifications.filter((n) => !dismissedNotifications.has(n.id)),
@@ -731,10 +769,17 @@ function AuthenticatedApp({ user, onLogout }) {
   const handleNotificationClick = useCallback((notif) => {
     if (notif.robotId) {
       navigate(`/robots?selected=${notif.robotId}`);
+    } else if (notif.link) {
+      navigate(notif.link);
     }
   }, [navigate]);
 
   const subtitle = activePage === "dashboard" ? dateStr.toUpperCase() : page.subtitle;
+
+  const offlineCount = useMemo(
+    () => visibleRobots.filter((r) => r.status === "inactive").length,
+    [visibleRobots]
+  );
 
   // Tela de loading inicial — espera todos os dados carregarem
   if (!dataReady && !logsError) {
@@ -795,7 +840,8 @@ function AuthenticatedApp({ user, onLogout }) {
         navigate(routes[id] || "/");
         if (isMobile) setMobileMenuOpen(false);
       }} collapsed={isMobile ? false : sidebarCollapsed} onToggle={toggleSidebar} userRole={user.role}
-        isMobile={isMobile} mobileOpen={mobileMenuOpen} onMobileClose={() => setMobileMenuOpen(false)} />
+        isMobile={isMobile} mobileOpen={mobileMenuOpen} onMobileClose={() => setMobileMenuOpen(false)}
+        offlineCount={offlineCount} />
 
       <main className={`p-4 md:p-8 transition-all duration-300 ${isMobile ? "ml-0" : sidebarCollapsed ? "ml-16" : "ml-64"}`}>
         <Header
@@ -886,7 +932,7 @@ function AuthenticatedApp({ user, onLogout }) {
               </div>
               {/* Barra de ações em lote */}
               {batchMode && selectedRobots.size > 0 && (
-                <div className="fixed bottom-6 left-1/2 -translate-x-1/2 z-50 flex items-center gap-3 px-5 py-3 rounded-xl border border-white/10 bg-surface-800/95 backdrop-blur-sm shadow-2xl">
+                <div className="fixed bottom-4 left-2 right-2 sm:bottom-6 sm:left-1/2 sm:right-auto sm:-translate-x-1/2 z-50 flex items-center justify-center gap-2 sm:gap-3 px-3 sm:px-5 py-3 rounded-xl border border-white/10 bg-surface-800/95 backdrop-blur-sm shadow-2xl flex-wrap">
                   <span className="text-xs font-mono text-white/50">
                     {selectedRobots.size} selecionado{selectedRobots.size !== 1 ? "s" : ""}
                   </span>

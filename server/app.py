@@ -133,29 +133,42 @@ async def uipath_delete(orch: dict, endpoint: str) -> dict:
         return {"status": "ok"}
 
 
-async def request_all_orchestrators(endpoint: str, params: dict | None = None, user: dict | None = None) -> list:
-    """Faz a mesma requisição em todos os orchestrators em PARALELO e combina os resultados."""
+async def request_all_orchestrators_with_status(
+    endpoint: str, params: dict | None = None, user: dict | None = None
+) -> tuple[list, set[str]]:
+    """Como request_all_orchestrators, mas também devolve o conjunto de IDs
+    dos orchestrators que responderam com sucesso (para distinguir 'sem dados'
+    de 'falha de conexão')."""
     import asyncio
     orchestrators = load_orchestrators(user=user)
 
     async def fetch_one(orch):
         if not orch.get("clientId") or not orch.get("clientSecret"):
-            return []
+            return [], False, orch["id"]
         try:
             data = await uipath_get(orch, endpoint, params)
             values = data.get("value", [])
             for item in values:
                 item["_orchestratorId"] = orch["id"]
                 item["_orchestratorName"] = orch["name"]
-            return values
+            return values, True, orch["id"]
         except Exception:
-            return []
+            return [], False, orch["id"]
 
     results = await asyncio.gather(*[fetch_one(orch) for orch in orchestrators])
     all_values = []
-    for values in results:
+    healthy_ids: set[str] = set()
+    for values, ok, orch_id in results:
         all_values.extend(values)
-    return all_values
+        if ok:
+            healthy_ids.add(orch_id)
+    return all_values, healthy_ids
+
+
+async def request_all_orchestrators(endpoint: str, params: dict | None = None, user: dict | None = None) -> list:
+    """Faz a mesma requisição em todos os orchestrators em PARALELO e combina os resultados."""
+    values, _ = await request_all_orchestrators_with_status(endpoint, params, user)
+    return values
 
 
 # ─── Auth ─────────────────────────────────────────────────
@@ -185,6 +198,23 @@ async def login(request: Request, req: LoginRequest):
         db.close()
 
 
+@app.post("/api/auth/refresh")
+async def refresh_token(payload: dict = Depends(require_viewer)):
+    """Emite um novo token a partir de um token válido — usado pelo frontend
+    pra renovar a sessão sem precisar relogar."""
+    from models import User
+    db = SessionLocal()
+    try:
+        user = db.query(User).filter_by(id=payload["sub"]).first()
+        if not user or not user.active:
+            raise HTTPException(status_code=401, detail="Usuário inválido")
+        from auth import create_token
+        new_token = create_token(user.id, user.email, user.role)
+        return {"token": new_token}
+    finally:
+        db.close()
+
+
 @app.get("/api/auth/me")
 async def get_me(payload: dict = Depends(require_viewer)):
     from models import User
@@ -199,6 +229,13 @@ async def get_me(payload: dict = Depends(require_viewer)):
 
 
 # ─── Health ───────────────────────────────────────────────
+
+@app.get("/api/ping")
+async def ping():
+    """Healthcheck público — apenas confirma que o uvicorn está respondendo.
+    Usado pelo Docker healthcheck (sem autenticação)."""
+    return {"status": "ok"}
+
 
 @app.get("/api/health")
 async def health(_user: dict = Depends(require_viewer)):
@@ -405,15 +442,41 @@ async def stop_job(request: Request, req: JobActionRequest, _user: dict = Depend
 async def get_audit_logs(
     top: int = Query(50, alias="$top"),
     skip: int = Query(0, alias="$skip"),
+    user_id: str | None = Query(None, alias="userId"),
+    action: str | None = Query(None),
+    robot_name: str | None = Query(None, alias="robotName"),
+    date_from: str | None = Query(None, alias="from"),
+    date_to: str | None = Query(None, alias="to"),
     _user: dict = Depends(require_admin),
 ):
-    """Retorna histórico de ações."""
+    """Retorna histórico de ações com filtros opcionais."""
     from models import AuditLog
+    from datetime import datetime
     db = SessionLocal()
     try:
-        total = db.query(AuditLog).count()
+        query = db.query(AuditLog)
+        if user_id:
+            query = query.filter(AuditLog.user_id == user_id)
+        if action:
+            query = query.filter(AuditLog.action == action)
+        if robot_name:
+            query = query.filter(AuditLog.robot_name.ilike(f"%{robot_name}%"))
+        if date_from:
+            try:
+                dt_from = datetime.fromisoformat(date_from)
+                query = query.filter(AuditLog.created_at >= dt_from)
+            except ValueError:
+                pass
+        if date_to:
+            try:
+                dt_to = datetime.fromisoformat(date_to)
+                query = query.filter(AuditLog.created_at <= dt_to)
+            except ValueError:
+                pass
+
+        total = query.count()
         logs = (
-            db.query(AuditLog)
+            query
             .order_by(AuditLog.created_at.desc())
             .offset(skip)
             .limit(top)
@@ -611,9 +674,9 @@ async def get_sessions(_user: dict = Depends(require_viewer)):
         return cached
 
     global _previous_online_assistants
-    all_sessions = await request_all_orchestrators("Sessions", user=_user)
+    all_sessions, healthy_orch_ids = await request_all_orchestrators_with_status("Sessions", user=_user)
 
-    # Identifica assistants online agora
+    # Identifica assistants online agora (só dos orchestrators que responderam)
     current_online = {}
     for s in all_sessions:
         if s.get("Source") == "Assistant" and s.get("State") == "Available" and s.get("HostMachineName"):
@@ -626,13 +689,24 @@ async def get_sessions(_user: dict = Depends(require_viewer)):
                 "orchestratorName": s.get("_orchestratorName"),
             }
 
-    # Detecta quem sumiu
+    # Detecta quem sumiu APENAS em orchestrators que responderam nesta rodada.
+    # Sem isso, falha de rede transforma todo o snapshot anterior em "offline".
     gone_offline = []
     for key, info in _previous_online_assistants.items():
+        if info.get("orchestratorId") not in healthy_orch_ids:
+            continue
         if key not in current_online:
             gone_offline.append(info)
 
-    _previous_online_assistants = current_online
+    # Atualiza o snapshot por orchestrator: preserva o estado dos que falharam,
+    # sobrescreve só os que responderam.
+    new_snapshot = {
+        key: info
+        for key, info in _previous_online_assistants.items()
+        if info.get("orchestratorId") not in healthy_orch_ids
+    }
+    new_snapshot.update(current_online)
+    _previous_online_assistants = new_snapshot
 
     result = {
         "value": all_sessions,
@@ -644,14 +718,55 @@ async def get_sessions(_user: dict = Depends(require_viewer)):
 
 # ─── Triggers (ProcessSchedules) ──────────────────────────
 
+# Snapshot dos triggers que estavam HABILITADOS no último check.
+# Usado pra detectar quando o UiPath desabilita automaticamente (fila estourou).
+_previous_enabled_triggers: dict[str, dict] = {}
+# IDs dos triggers desabilitados manualmente via portal — pra não confundir com auto-disable.
+_manually_disabled_triggers: set[str] = set()
+
+
 @app.get("/api/triggers")
 async def get_triggers(_user: dict = Depends(require_viewer)):
-    """Busca todos os gatilhos de todos os orchestrators."""
+    """Busca todos os gatilhos e detecta os que foram auto-desabilitados pelo UiPath."""
     cached = get_cached("triggers", ttl=10)
     if cached:
         return cached
+
+    global _previous_enabled_triggers, _manually_disabled_triggers
     all_triggers = await request_all_orchestrators("ProcessSchedules", user=_user)
-    result = {"value": all_triggers}
+
+    current_keys = set()
+    current_enabled: dict[str, dict] = {}
+    current_disabled_keys: set[str] = set()
+    for t in all_triggers:
+        key = f"{t.get('_orchestratorId')}::{t.get('Id')}"
+        current_keys.add(key)
+        if t.get("Enabled"):
+            current_enabled[key] = t
+        else:
+            current_disabled_keys.add(key)
+
+    # Auto-disabled: estava habilitado no snapshot anterior, agora está desabilitado,
+    # e ninguém desabilitou manualmente via portal nesta rodada.
+    auto_disabled = []
+    for key, prev in _previous_enabled_triggers.items():
+        if key in current_disabled_keys and key not in _manually_disabled_triggers:
+            auto_disabled.append({
+                "id": prev.get("Id"),
+                "name": prev.get("Name"),
+                "releaseName": prev.get("ReleaseName"),
+                "orchestratorId": prev.get("_orchestratorId"),
+                "orchestratorName": prev.get("_orchestratorName"),
+            })
+
+    # Atualiza snapshots
+    _previous_enabled_triggers = current_enabled
+    # Limpa flags de "manual": tira do set os que já apareceram como disabled
+    # (a transição já foi observada) e os que sumiram do UiPath.
+    _manually_disabled_triggers &= current_keys
+    _manually_disabled_triggers -= current_disabled_keys
+
+    result = {"value": all_triggers, "autoDisabled": auto_disabled}
     set_cached("triggers", result)
     return result
 
@@ -678,6 +793,15 @@ async def set_trigger_enable(req: SetEnableRequest, _user: dict = Depends(requir
     current["Enabled"] = req.enabled
     current = _clean_schedule_for_put(current)
     result = await uipath_put(orch, f"ProcessSchedules({req.scheduleId})", current)
+
+    # Marca a desabilitação como manual pra não disparar notificação de auto-disable.
+    global _manually_disabled_triggers
+    key = f"{req.orchestratorId}::{req.scheduleId}"
+    if req.enabled:
+        _manually_disabled_triggers.discard(key)
+    else:
+        _manually_disabled_triggers.add(key)
+
     clear_cache()
     return result
 

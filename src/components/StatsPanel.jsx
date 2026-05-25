@@ -137,7 +137,7 @@ export default function StatsPanel({ robots, jobs, sessions }) {
   );
 
   return (
-    <div className="grid grid-cols-5 gap-4">
+    <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-3 sm:gap-4">
       {stats.map((stat, i) => {
         const Icon = stat.icon;
         return (
@@ -148,19 +148,19 @@ export default function StatsPanel({ robots, jobs, sessions }) {
             initial={{ opacity: 0, y: 20 }}
             animate={{ opacity: 1, y: 0 }}
             transition={{ delay: i * 0.1, duration: 0.5, ease: "easeOut" }}
-            className={`relative overflow-hidden rounded-xl border ${stat.borderColor} ${stat.bgColor} p-5 ${stat.clickable ? "cursor-pointer hover:border-white/20 transition-all" : ""}`}
+            className={`relative overflow-hidden rounded-xl border ${stat.borderColor} ${stat.bgColor} p-3 sm:p-5 ${stat.clickable ? "cursor-pointer hover:border-white/20 transition-all" : ""}`}
           >
-            <div className="flex items-center justify-between">
-              <div>
-                <p className="text-xs font-medium text-white/40 uppercase tracking-wider mb-1">
+            <div className="flex items-center justify-between gap-2">
+              <div className="min-w-0">
+                <p className="text-[10px] sm:text-xs font-medium text-white/40 uppercase tracking-wider mb-1 truncate">
                   {stat.label}
                 </p>
-                <p className={`font-mono text-3xl font-bold ${stat.color}`}>
+                <p className={`font-mono text-2xl sm:text-3xl font-bold ${stat.color}`}>
                   {String(stat.value).padStart(2, "0")}
                 </p>
               </div>
               <div
-                className={`w-12 h-12 rounded-xl ${stat.bgColor} flex items-center justify-center`}
+                className={`hidden sm:flex w-12 h-12 rounded-xl ${stat.bgColor} items-center justify-center shrink-0`}
               >
                 <Icon className={`w-6 h-6 ${stat.color}`} />
               </div>

@@ -24,7 +24,7 @@ const navItems = [
   { icon: Settings, label: "Configurações", id: "settings" },
 ];
 
-export default function Sidebar({ activePage, onNavigate, collapsed, onToggle, userRole, isMobile, mobileOpen, onMobileClose }) {
+export default function Sidebar({ activePage, onNavigate, collapsed, onToggle, userRole, isMobile, mobileOpen, onMobileClose, offlineCount = 0 }) {
   // Mobile: overlay
   if (isMobile) {
     if (!mobileOpen) return null;
@@ -37,6 +37,7 @@ export default function Sidebar({ activePage, onNavigate, collapsed, onToggle, u
             onNavigate={onNavigate}
             collapsed={false}
             userRole={userRole}
+            offlineCount={offlineCount}
           />
           <div className="absolute top-4 right-3">
             <button onClick={onMobileClose} className="w-8 h-8 rounded-lg flex items-center justify-center text-white/30 hover:text-white/60 hover:bg-white/5 cursor-pointer">
@@ -56,6 +57,7 @@ export default function Sidebar({ activePage, onNavigate, collapsed, onToggle, u
         onNavigate={onNavigate}
         collapsed={collapsed}
         userRole={userRole}
+        offlineCount={offlineCount}
       />
       {/* Toggle button */}
       <div className={`py-2 border-t border-white/5 ${collapsed ? "px-2" : "px-3"}`}>
@@ -71,7 +73,7 @@ export default function Sidebar({ activePage, onNavigate, collapsed, onToggle, u
   );
 }
 
-function SidebarContent({ activePage, onNavigate, collapsed, userRole }) {
+function SidebarContent({ activePage, onNavigate, collapsed, userRole, offlineCount = 0 }) {
   return (
     <>
       {/* Logo */}
@@ -109,7 +111,7 @@ function SidebarContent({ activePage, onNavigate, collapsed, userRole }) {
               transition={{ delay: i * 0.08, duration: 0.4 }}
               onClick={() => onNavigate(item.id)}
               title={collapsed ? item.label : undefined}
-              className={`w-full flex items-center gap-3 rounded-lg text-sm font-medium transition-all duration-200 group cursor-pointer ${
+              className={`relative w-full flex items-center gap-3 rounded-lg text-sm font-medium transition-all duration-200 group cursor-pointer ${
                 collapsed ? "px-0 py-2.5 justify-center" : "px-3 py-2.5"
               } ${
                 isActive
@@ -121,7 +123,19 @@ function SidebarContent({ activePage, onNavigate, collapsed, userRole }) {
                 className={`w-4.5 h-4.5 shrink-0 ${isActive ? "text-accent" : "text-white/30 group-hover:text-white/60"}`}
               />
               {!collapsed && <span>{item.label}</span>}
-              {!collapsed && isActive && (
+              {item.id === "robots" && offlineCount > 0 && (
+                collapsed ? (
+                  <span className="absolute top-1 right-1 w-1.5 h-1.5 rounded-full bg-status-offline" title={`${offlineCount} offline`} />
+                ) : (
+                  <span
+                    className="ml-auto text-[10px] font-mono font-medium px-1.5 py-0.5 rounded bg-status-offline/15 text-status-offline"
+                    title={`${offlineCount} robôs offline`}
+                  >
+                    {offlineCount}
+                  </span>
+                )
+              )}
+              {!collapsed && isActive && !(item.id === "robots" && offlineCount > 0) && (
                 <ChevronRight className="w-4 h-4 ml-auto text-accent/60" />
               )}
             </motion.button>

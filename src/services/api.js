@@ -120,6 +120,17 @@ export function logout() {
   localStorage.removeItem("user");
 }
 
+export async function refreshToken() {
+  const res = await fetch(`${API_BASE}/auth/refresh`, {
+    method: "POST",
+    headers: { ...getAuthHeaders() },
+  });
+  if (!res.ok) throw new Error("Falha ao renovar sessão");
+  const data = await res.json();
+  localStorage.setItem("token", data.token);
+  return data.token;
+}
+
 export function getStoredUser() {
   const user = localStorage.getItem("user");
   const token = localStorage.getItem("token");
@@ -306,7 +317,12 @@ export async function changePassword(currentPassword, newPassword) {
 
 // ─── Audit Trail ───────────────────────────────
 
-export async function fetchAuditLogs({ top = 50, skip = 0 } = {}) {
+export async function fetchAuditLogs({ top = 50, skip = 0, userId, action, robotName, from, to } = {}) {
   const params = new URLSearchParams({ $top: top, $skip: skip });
+  if (userId) params.append("userId", userId);
+  if (action) params.append("action", action);
+  if (robotName) params.append("robotName", robotName);
+  if (from) params.append("from", from);
+  if (to) params.append("to", to);
   return request(`${API_BASE}/audit?${params}`);
 }

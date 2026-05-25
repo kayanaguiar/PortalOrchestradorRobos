@@ -41,7 +41,12 @@ export default function Header({ title, subtitle, loading, onRefresh, searchTerm
   useEffect(() => {
     if (showNotifications && bellRef.current) {
       const rect = bellRef.current.getBoundingClientRect();
-      setPanelPos({ top: rect.bottom + 8, right: window.innerWidth - rect.right });
+      // Em mobile (< 640px) o painel ocupa quase toda a tela com 8px de margem.
+      const mobile = window.innerWidth < 640;
+      setPanelPos({
+        top: rect.bottom + 8,
+        right: mobile ? 8 : Math.max(8, window.innerWidth - rect.right),
+      });
     }
   }, [showNotifications]);
 
@@ -62,8 +67,8 @@ export default function Header({ title, subtitle, loading, onRefresh, searchTerm
   const notificationPanel = showNotifications && createPortal(
     <div
       ref={panelRef}
-      style={{ position: "fixed", top: panelPos.top, right: panelPos.right }}
-      className="z-[9999] w-96 max-h-96 rounded-xl border border-white/10 bg-surface-800 shadow-2xl shadow-black/50 overflow-hidden"
+      style={{ position: "fixed", top: panelPos.top, right: panelPos.right, left: typeof window !== "undefined" && window.innerWidth < 640 ? 8 : "auto" }}
+      className="z-[9999] sm:w-96 max-h-[80vh] sm:max-h-96 rounded-xl border border-white/10 bg-surface-800 shadow-2xl shadow-black/50 overflow-hidden"
     >
       <div className="px-4 py-3 border-b border-white/5 flex items-center justify-between">
         <span className="text-sm font-semibold text-white">Notificações</span>
@@ -76,14 +81,14 @@ export default function Header({ title, subtitle, loading, onRefresh, searchTerm
           </button>
         )}
       </div>
-      <div className="overflow-y-auto max-h-80 divide-y divide-white/[0.03]">
+      <div className="overflow-y-auto max-h-[calc(80vh-3rem)] sm:max-h-80 divide-y divide-white/[0.03]">
         {notifications.length === 0 && (
           <div className="px-4 py-8 text-center text-white/20 text-sm">
             Nenhuma notificação
           </div>
         )}
         {notifications.map((notif) => {
-          const isClickable = !!notif.robotId;
+          const isClickable = !!notif.robotId || !!notif.link;
           return (
             <div
               key={notif.id}
@@ -102,10 +107,12 @@ export default function Header({ title, subtitle, loading, onRefresh, searchTerm
                   <AlertTriangle className="w-4 h-4 text-status-paused shrink-0 mt-0.5" />
                 )}
                 <div className="flex-1 min-w-0">
-                  <div className="flex items-center gap-2">
+                  <div className="flex items-center gap-2 flex-wrap">
                     <p className="text-xs font-medium text-white/80">{notif.title}</p>
                     {isClickable && (
-                      <span className="text-[9px] font-mono text-accent/50">VER LOGS</span>
+                      <span className="text-[9px] font-mono text-accent/50">
+                        {notif.robotId ? "VER LOGS" : "ABRIR"}
+                      </span>
                     )}
                   </div>
                   <ExpandableLog
@@ -119,9 +126,9 @@ export default function Header({ title, subtitle, loading, onRefresh, searchTerm
                   </span>
                   <button
                     onClick={(e) => { e.stopPropagation(); onDismissNotification?.(notif.id); }}
-                    className="opacity-0 group-hover:opacity-100 w-5 h-5 rounded flex items-center justify-center text-white/20 hover:text-white/60 hover:bg-white/5 transition-all cursor-pointer"
+                    className="w-6 h-6 sm:w-5 sm:h-5 sm:opacity-0 sm:group-hover:opacity-100 rounded flex items-center justify-center text-white/30 sm:text-white/20 hover:text-white/70 hover:bg-white/5 transition-all cursor-pointer"
                   >
-                    <X className="w-3 h-3" />
+                    <X className="w-3.5 h-3.5 sm:w-3 sm:h-3" />
                   </button>
                 </div>
               </div>

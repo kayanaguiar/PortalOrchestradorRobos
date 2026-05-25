@@ -17,6 +17,10 @@ function formatDisplay(dateStr) {
   return d.toLocaleDateString("pt-BR", { day: "2-digit", month: "2-digit", year: "numeric" });
 }
 
+function parseDateStr(dateStr) {
+  return new Date(dateStr + "T12:00:00");
+}
+
 function getDaysInMonth(year, month) {
   return new Date(year, month + 1, 0).getDate();
 }
@@ -25,17 +29,21 @@ function getFirstDayOfMonth(year, month) {
   return new Date(year, month, 1).getDay();
 }
 
-export default function DatePicker({ value, onChange }) {
+export default function DatePicker({ value, onChange, placeholder = "Selecione uma data", clearable = false, min, max }) {
   const [open, setOpen] = useState(false);
   const btnRef = useRef(null);
   const popRef = useRef(null);
   const [pos, setPos] = useState({ top: 0, left: 0 });
 
-  const selected = new Date(value + "T12:00:00");
-  const [viewYear, setViewYear] = useState(selected.getFullYear());
-  const [viewMonth, setViewMonth] = useState(selected.getMonth());
-
   const today = new Date();
+  const hasValue = !!value;
+  const selected = hasValue ? parseDateStr(value) : null;
+  const minDate = min ? parseDateStr(min) : null;
+  const maxDate = max ? parseDateStr(max) : null;
+
+  const [viewYear, setViewYear] = useState(selected ? selected.getFullYear() : today.getFullYear());
+  const [viewMonth, setViewMonth] = useState(selected ? selected.getMonth() : today.getMonth());
+
   const todayDate = todayStr();
   const isToday = value === todayDate;
 
@@ -78,7 +86,17 @@ export default function DatePicker({ value, onChange }) {
   const daysInMonth = getDaysInMonth(viewYear, viewMonth);
   const firstDay = getFirstDayOfMonth(viewYear, viewMonth);
 
+  // Limite superior efetivo: o menor entre `max` informado e a data de hoje.
+  const upperBound = maxDate && maxDate < today ? maxDate : today;
+
   const prevMonth = () => {
+    // Se há min, não pode voltar antes do mês de min
+    if (minDate) {
+      const prevM = viewMonth === 0 ? 11 : viewMonth - 1;
+      const prevY = viewMonth === 0 ? viewYear - 1 : viewYear;
+      const lastDayPrev = new Date(prevY, prevM + 1, 0);
+      if (lastDayPrev < minDate) return;
+    }
     if (viewMonth === 0) { setViewMonth(11); setViewYear((y) => y - 1); }
     else setViewMonth((m) => m - 1);
   };
@@ -86,7 +104,7 @@ export default function DatePicker({ value, onChange }) {
   const nextMonth = () => {
     const nextM = viewMonth === 11 ? 0 : viewMonth + 1;
     const nextY = viewMonth === 11 ? viewYear + 1 : viewYear;
-    if (new Date(nextY, nextM, 1) > today) return;
+    if (new Date(nextY, nextM, 1) > upperBound) return;
     if (viewMonth === 11) { setViewMonth(0); setViewYear((y) => y + 1); }
     else setViewMonth((m) => m + 1);
   };
@@ -98,14 +116,34 @@ export default function DatePicker({ value, onChange }) {
     setOpen(false);
   };
 
-  const isFuture = (day) => new Date(viewYear, viewMonth, day) > today;
-  const isSelected = (day) => selected.getFullYear() === viewYear && selected.getMonth() === viewMonth && selected.getDate() === day;
+  const isOutOfRange = (day) => {
+    const d = new Date(viewYear, viewMonth, day);
+    if (d > upperBound) return true;
+    if (minDate && d < minDate) return true;
+    return false;
+  };
+  const isSelected = (day) => selected && selected.getFullYear() === viewYear && selected.getMonth() === viewMonth && selected.getDate() === day;
   const isTodayCell = (day) => today.getFullYear() === viewYear && today.getMonth() === viewMonth && today.getDate() === day;
 
   const canGoNext = (() => {
     const nextM = viewMonth === 11 ? 0 : viewMonth + 1;
     const nextY = viewMonth === 11 ? viewYear + 1 : viewYear;
-    return new Date(nextY, nextM, 1) <= today;
+    return new Date(nextY, nextM, 1) <= upperBound;
+  })();
+
+  const canGoPrev = (() => {
+    if (!minDate) return true;
+    const prevM = viewMonth === 0 ? 11 : viewMonth - 1;
+    const prevY = viewMonth === 0 ? viewYear - 1 : viewYear;
+    const lastDayPrev = new Date(prevY, prevM + 1, 0);
+    return lastDayPrev >= minDate;
+  })();
+
+  // "HOJE" só aparece se a data de hoje for selecionável (dentro do range, se houver)
+  const todayInRange = (() => {
+    if (maxDate && today > maxDate) return false;
+    if (minDate && today < minDate) return false;
+    return true;
   })();
 
   const popup = open && createPortal(
@@ -116,7 +154,11 @@ export default function DatePicker({ value, onChange }) {
     >
       {/* Month/Year nav */}
       <div className="flex items-center justify-between mb-3">
-        <button onClick={prevMonth} className="w-7 h-7 rounded-md hover:bg-white/5 flex items-center justify-center text-white/40 hover:text-white/70 cursor-pointer transition-colors">
+        <button
+          onClick={prevMonth}
+          disabled={!canGoPrev}
+          className="w-7 h-7 rounded-md hover:bg-white/5 flex items-center justify-center text-white/40 hover:text-white/70 cursor-pointer transition-colors disabled:opacity-20 disabled:cursor-not-allowed"
+        >
           <ChevronLeft className="w-4 h-4" />
         </button>
         <span className="text-sm font-medium text-white/70">
@@ -148,21 +190,21 @@ export default function DatePicker({ value, onChange }) {
 
         {Array.from({ length: daysInMonth }).map((_, i) => {
           const day = i + 1;
-          const future = isFuture(day);
+          const disabled = isOutOfRange(day);
           const sel = isSelected(day);
           const todayC = isTodayCell(day);
 
           return (
             <button
               key={day}
-              onClick={() => !future && selectDay(day)}
-              disabled={future}
+              onClick={() => !disabled && selectDay(day)}
+              disabled={disabled}
               className={`w-full aspect-square rounded-lg text-xs font-mono flex items-center justify-center transition-all cursor-pointer
                 ${sel
                   ? "bg-accent text-white font-bold"
                   : todayC
                     ? "bg-accent/15 text-accent border border-accent/30"
-                    : future
+                    : disabled
                       ? "text-white/10 cursor-not-allowed"
                       : "text-white/50 hover:bg-white/5 hover:text-white/80"
                 }
@@ -173,29 +215,48 @@ export default function DatePicker({ value, onChange }) {
           );
         })}
       </div>
+
+      {/* Footer com atalhos (Limpar / Hoje) */}
+      {(clearable || todayInRange) && (
+        <div className="mt-3 pt-3 border-t border-white/5 flex items-center justify-between">
+          {clearable && hasValue ? (
+            <button
+              onClick={() => { onChange(""); setOpen(false); }}
+              className="text-[10px] font-mono text-white/40 hover:text-white/70 transition-colors cursor-pointer"
+            >
+              Limpar
+            </button>
+          ) : <span />}
+          {todayInRange && !isToday && (
+            <button
+              onClick={() => {
+                onChange(todayDate);
+                setViewYear(today.getFullYear());
+                setViewMonth(today.getMonth());
+                setOpen(false);
+              }}
+              className="text-[10px] font-mono text-accent hover:text-accent-light transition-colors cursor-pointer"
+            >
+              Hoje
+            </button>
+          )}
+        </div>
+      )}
     </div>,
     document.body
   );
 
   return (
-    <div className="flex items-center gap-2">
+    <>
       <button
         ref={btnRef}
         onClick={() => setOpen((o) => !o)}
-        className="flex items-center gap-2 bg-surface-700/50 border border-white/5 rounded-lg px-3 py-2 text-sm text-white/60 font-mono hover:border-white/10 transition-all cursor-pointer"
+        className={`flex items-center gap-2 bg-surface-700/50 border border-white/5 rounded-lg px-3 py-2 text-sm font-mono hover:border-white/10 transition-all cursor-pointer ${hasValue ? "text-white/60" : "text-white/30"}`}
       >
         <Calendar className="w-4 h-4 text-white/30" />
-        {formatDisplay(value)}
+        {hasValue ? formatDisplay(value) : placeholder}
       </button>
-      {!isToday && (
-        <button
-          onClick={() => { onChange(todayDate); setViewYear(today.getFullYear()); setViewMonth(today.getMonth()); }}
-          className="px-2 py-1.5 rounded text-[10px] font-mono text-accent border border-accent/30 hover:bg-accent/10 transition-all cursor-pointer"
-        >
-          HOJE
-        </button>
-      )}
       {popup}
-    </div>
+    </>
   );
 }

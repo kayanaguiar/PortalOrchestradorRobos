@@ -1,4 +1,5 @@
 import os
+import sys
 import uuid
 from datetime import datetime, timedelta, timezone
 
@@ -6,9 +7,25 @@ import bcrypt
 import jwt
 from fastapi import HTTPException, Request
 
-JWT_SECRET = os.getenv("JWT_SECRET", "robocommand-dev-only-change-in-production")
+JWT_SECRET = os.getenv("JWT_SECRET", "").strip()
 JWT_ALGORITHM = "HS256"
 JWT_EXPIRATION_HOURS = 24
+
+# Recusa boot se o secret estiver ausente ou usar o placeholder do .env.example.
+# Em qualquer um dos casos os tokens seriam forjáveis por quem leu o repositório.
+_INSECURE_SECRETS = {
+    "",
+    "TROQUE_AQUI",
+    "robocommand-dev-only-change-in-production",
+}
+if JWT_SECRET in _INSECURE_SECRETS or len(JWT_SECRET) < 32:
+    sys.stderr.write(
+        "\n[FATAL] JWT_SECRET ausente, igual ao placeholder do .env.example ou curto demais (<32 chars).\n"
+        "         Gere um valor seguro com:\n"
+        '           python -c "import secrets; print(secrets.token_urlsafe(48))"\n'
+        "         e defina JWT_SECRET no .env antes de subir o backend.\n\n"
+    )
+    sys.exit(1)
 
 
 def hash_password(password: str) -> str:

@@ -11,6 +11,7 @@ import {
   ArrowUpCircle,
   Archive,
   Star,
+  WifiOff,
 } from "lucide-react";
 import { motion } from "motion/react";
 import ExpandableLog from "./ExpandableLog";
@@ -45,11 +46,12 @@ const statusConfig = {
     dotClass: "pulse-running",
   },
   inactive: {
-    label: "Inativo",
-    color: "text-white/30",
-    bg: "bg-white/20",
+    label: "Offline",
+    color: "text-status-offline",
+    bg: "bg-status-offline",
     glow: "",
     dotClass: "",
+    icon: WifiOff,
   },
 };
 
@@ -75,9 +77,13 @@ export default function RobotCard({ robot, index, onAction, onArchive, onClick, 
         <div className="flex items-start justify-between mb-4">
           <div className="flex-1 min-w-0">
             <div className="flex items-center gap-2 mb-1">
-              <div
-                className={`w-2 h-2 rounded-full ${config.bg} ${config.dotClass}`}
-              />
+              {config.icon ? (
+                <config.icon className={`w-3 h-3 ${config.color}`} />
+              ) : (
+                <div
+                  className={`w-2 h-2 rounded-full ${config.bg} ${config.dotClass}`}
+                />
+              )}
               <span
                 className={`font-mono text-[10px] uppercase tracking-widest ${config.color}`}
               >

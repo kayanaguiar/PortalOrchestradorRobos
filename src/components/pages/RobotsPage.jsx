@@ -17,6 +17,7 @@ import {
   Search,
   Plus,
   X,
+  WifiOff,
 } from "lucide-react";
 import { motion } from "motion/react";
 import { fetchLogs, fetchJobs, fetchPackages, fetchOrchestrators, createRelease } from "../../services/api";
@@ -49,6 +50,13 @@ const statusConfig = {
     color: "text-status-error",
     bg: "bg-status-error",
     dotClass: "pulse-running",
+  },
+  inactive: {
+    label: "Offline",
+    color: "text-status-offline",
+    bg: "bg-status-offline",
+    dotClass: "",
+    icon: WifiOff,
   },
 };
 
@@ -273,7 +281,11 @@ export default function RobotsPage({ robots, onAction, searchTerm: externalSearc
         <div className="rounded-xl border border-white/5 bg-surface-800/60 p-6 mb-6">
           <div className="mb-6">
             <div className="flex items-center gap-2 mb-2">
-              <div className={`w-2.5 h-2.5 rounded-full ${config.bg} ${config.dotClass}`} />
+              {config.icon ? (
+                <config.icon className={`w-3.5 h-3.5 ${config.color}`} />
+              ) : (
+                <div className={`w-2.5 h-2.5 rounded-full ${config.bg} ${config.dotClass}`} />
+              )}
               <span className={`font-mono text-xs uppercase tracking-widest ${config.color}`}>
                 {config.label}
               </span>
@@ -523,7 +535,11 @@ export default function RobotsPage({ robots, onAction, searchTerm: externalSearc
               onClick={() => { setSelectedRobotId(robot.id); setSearchParams({ selected: robot.id }); }}
               className="px-5 py-4 flex items-center gap-5 hover:bg-white/[0.03] transition-colors cursor-pointer"
             >
-              <div className={`w-2.5 h-2.5 rounded-full shrink-0 ${config.bg} ${config.dotClass}`} />
+              {config.icon ? (
+                <config.icon className={`w-3.5 h-3.5 shrink-0 ${config.color}`} />
+              ) : (
+                <div className={`w-2.5 h-2.5 rounded-full shrink-0 ${config.bg} ${config.dotClass}`} />
+              )}
               <div className="flex-1 min-w-0">
                 <div className="flex items-center gap-2">
                   <span className="text-sm font-medium text-white">{robot.name}</span>
