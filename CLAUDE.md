@@ -1,7 +1,7 @@
 # RoboCommand - Portal Orchestrador de Robôs UiPath
 
 ## Stack
-- **Frontend**: React 19 + Tailwind CSS 4 + Vite 8 + React Router + Motion
+- **Frontend**: React 19 + Tailwind CSS 4 + Vite 8 + React Router + Motion + @dnd-kit
 - **Backend**: Python FastAPI + httpx + uvicorn
 - **Docker**: Nginx (frontend) + FastAPI (backend) + PostgreSQL (preparado)
 - **Linguagem**: JavaScript (JSX) no frontend, Python no backend
@@ -28,7 +28,9 @@ Acessa http://localhost
 ```
 src/
   components/         # Componentes React
-    pages/            # Páginas (RobotsPage, LogsPage, SettingsPage)
+    pages/            # Páginas lazy-loaded (RobotsPage, LogsPage, SettingsPage, TriggersPage, UsersPage, LoginPage)
+    SortableRobotCard.jsx  # Wrapper drag-and-drop para RobotCard (@dnd-kit)
+    ExpandableLog.jsx      # Log clicável: truncado → expandido
     DatePicker.jsx    # Calendário customizado com portal
     ConfirmModal.jsx  # Modal de confirmação para ações perigosas
     Toast.jsx         # Notificações temporárias
@@ -43,10 +45,13 @@ server/
 ```
 
 ## Rotas
-- `/` — Dashboard
-- `/robots` — Robôs (lista + detalhe com logs por execução)
+- `/` — Dashboard (cards arrastáveis, ações em lote, order salva no localStorage)
+- `/robots` — Robôs (lista + detalhe com logs por execução + polling automático)
 - `/history` — Histórico de Jobs (filtro por data/status/robô)
-- `/settings` — Configurações de Orchestrators e polling
+- `/triggers` — Gatilhos (agendamentos e triggers do UiPath, criar/editar/excluir)
+- `/audit` — Auditoria (admin only, histórico de quem fez o que)
+- `/users` — Usuários (admin only)
+- `/settings` — Configurações de Orchestrators e polling (botão salvar fixo no rodapé)
 
 ## Regras importantes
 
@@ -61,6 +66,10 @@ server/
 ### Frontend
 - NÃO usar dados mock/fallback — apenas dados reais da API
 - Loading progressivo: só espera health + jobs + logs. Resto carrega em background
+- Páginas são lazy-loaded (React.lazy + Suspense) para code splitting
+- Cards do dashboard arrastáveis (@dnd-kit), ordem salva no localStorage
+- Logs truncados são expandíveis ao clicar (ExpandableLog.jsx)
+- Notificações de erro são clicáveis → navega para o robô com VER LOGS
 - Ações perigosas (Stop/Kill/Restart) pedem confirmação via modal
 - Toast de feedback após ações (sucesso/erro)
 - Sidebar colapsável persistida no localStorage

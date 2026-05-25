@@ -9,6 +9,7 @@ import {
   PanelLeftClose,
   PanelLeftOpen,
   Users,
+  ClipboardList,
   X,
 } from "lucide-react";
 import { motion } from "motion/react";
@@ -18,6 +19,7 @@ const navItems = [
   { icon: Bot, label: "Robôs", id: "robots" },
   { icon: ScrollText, label: "Histórico", id: "logs" },
   { icon: Timer, label: "Gatilhos", id: "triggers" },
+  { icon: ClipboardList, label: "Auditoria", id: "audit", adminOnly: true },
   { icon: Users, label: "Usuários", id: "users", adminOnly: true },
   { icon: Settings, label: "Configurações", id: "settings" },
 ];
@@ -116,7 +118,7 @@ function SidebarContent({ activePage, onNavigate, collapsed, userRole }) {
               }`}
             >
               <Icon
-                className={`w-[18px] h-[18px] shrink-0 ${isActive ? "text-accent" : "text-white/30 group-hover:text-white/60"}`}
+                className={`w-4.5 h-4.5 shrink-0 ${isActive ? "text-accent" : "text-white/30 group-hover:text-white/60"}`}
               />
               {!collapsed && <span>{item.label}</span>}
               {!collapsed && isActive && (

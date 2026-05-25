@@ -9,11 +9,13 @@ import {
   Timer,
   Globe,
   Pencil,
+  Trash2,
   X,
 } from "lucide-react";
 import { createPortal } from "react-dom";
 import { motion } from "motion/react";
-import { fetchTriggers, setTriggerEnable, updateTrigger, createTrigger, fetchProcesses } from "../../services/api";
+import { fetchTriggers, setTriggerEnable, updateTrigger, createTrigger, deleteTrigger, fetchProcesses } from "../../services/api";
+import ConfirmModal from "../ConfirmModal";
 import TimezoneSelect from "../TimezoneSelect";
 import CustomSelect from "../CustomSelect";
 import CronBuilder from "../CronBuilder";
@@ -55,7 +57,7 @@ export default function TriggersPage({ addToast }) {
       .finally(() => setLoading(false));
   }, [addToast]);
 
-  // Orchestrator names for filter
+  // Orchestrator names — combina triggers + processes para incluir todos
   const orchestratorNames = useMemo(() => {
     const names = new Map();
     for (const t of triggers) {
@@ -63,8 +65,13 @@ export default function TriggersPage({ addToast }) {
         names.set(t._orchestratorId, t._orchestratorName);
       }
     }
+    for (const p of processes) {
+      if (p._orchestratorId && p._orchestratorName) {
+        names.set(p._orchestratorId, p._orchestratorName);
+      }
+    }
     return Array.from(names.entries()).sort((a, b) => a[1].localeCompare(b[1]));
-  }, [triggers]);
+  }, [triggers, processes]);
 
   const search = searchTerm.toLowerCase().trim();
 
@@ -189,6 +196,25 @@ export default function TriggersPage({ addToast }) {
       setSaving(false);
     }
   }, [editingTrigger, isCreating, editForm, addToast]);
+
+  // Delete trigger
+  const [pendingDelete, setPendingDelete] = useState(null);
+  const [deleting, setDeleting] = useState(false);
+
+  const handleDelete = useCallback(async () => {
+    if (!pendingDelete) return;
+    setDeleting(true);
+    try {
+      await deleteTrigger(pendingDelete._orchestratorId, pendingDelete.Id);
+      setTriggers((prev) => prev.filter((t) => !(t.Id === pendingDelete.Id && t._orchestratorId === pendingDelete._orchestratorId)));
+      addToast?.("success", `Gatilho "${pendingDelete.Name}" excluído`);
+    } catch (err) {
+      addToast?.("error", `Erro ao excluir: ${err.message}`);
+    } finally {
+      setDeleting(false);
+      setPendingDelete(null);
+    }
+  }, [pendingDelete, addToast]);
 
   return (
     <div className="space-y-6">
@@ -370,6 +396,12 @@ export default function TriggersPage({ addToast }) {
                           <><XCircle className="w-3.5 h-3.5" /> Habilitar</>
                         )}
                       </button>
+                      <button
+                        onClick={() => setPendingDelete(trigger)}
+                        className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-status-error/20 text-status-error/60 text-xs font-medium hover:bg-status-error/10 hover:text-status-error transition-all cursor-pointer"
+                      >
+                        <Trash2 className="w-3.5 h-3.5" />
+                      </button>
                     </div>
                   </div>
                 </motion.div>
@@ -378,12 +410,25 @@ export default function TriggersPage({ addToast }) {
           </div>
         </motion.div>
       ))}
+
+      {/* Delete confirmation */}
+      <ConfirmModal
+        open={!!pendingDelete}
+        title="Excluir gatilho"
+        message={`Tem certeza que deseja EXCLUIR o gatilho "${pendingDelete?.Name}"?\n\nEsta ação não pode ser desfeita. O agendamento será removido permanentemente do Orchestrator.`}
+        confirmLabel={deleting ? "Excluindo..." : "Excluir"}
+        variant="danger"
+        onConfirm={handleDelete}
+        onCancel={() => setPendingDelete(null)}
+      />
+
       {/* Edit modal */}
       {editingTrigger && createPortal(
-        <div className="fixed inset-0 z-[9999] flex items-center justify-center">
+        <div className="fixed inset-0 z-[9999] flex items-center justify-center p-4">
           <div className="absolute inset-0 bg-black/60 backdrop-blur-sm" onClick={() => setEditingTrigger(null)} />
-          <div className="relative w-full max-w-lg mx-4 rounded-xl border border-white/10 bg-surface-800 shadow-2xl shadow-black/50 p-6">
-            <div className="flex items-center justify-between mb-5">
+          <div className="relative w-full max-w-lg rounded-xl border border-white/10 bg-surface-800 shadow-2xl shadow-black/50 flex flex-col max-h-[90vh]">
+            {/* Header fixo */}
+            <div className="flex items-center justify-between p-4 md:p-6 pb-0 shrink-0">
               <div>
                 <h3 className="text-sm font-semibold text-white">{isCreating ? "Novo Gatilho" : "Editar Gatilho"}</h3>
                 {!isCreating && <p className="text-[11px] text-white/30 font-mono mt-0.5">{editingTrigger.ReleaseName}</p>}
@@ -393,75 +438,79 @@ export default function TriggersPage({ addToast }) {
               </button>
             </div>
 
-            <div className="space-y-4">
-              {/* Orchestrator + Robô (só na criação) */}
-              {isCreating && (
-                <>
-                  <div>
-                    <label className="text-[10px] uppercase tracking-wider text-white/30 mb-1.5 block">Orchestrator</label>
-                    <CustomSelect
-                      value={editForm.orchestratorId}
-                      onChange={(v) => setEditForm((f) => ({ ...f, orchestratorId: v, releaseKey: "" }))}
-                      placeholder="Selecionar orchestrator..."
-                      options={orchestratorNames.map(([id, name]) => ({ value: id, label: name }))}
-                      className="w-full"
-                    />
-                  </div>
-                  <div>
-                    <label className="text-[10px] uppercase tracking-wider text-white/30 mb-1.5 block">Robô / Processo</label>
-                    <CustomSelect
-                      value={editForm.releaseKey}
-                      onChange={(v) => setEditForm((f) => ({ ...f, releaseKey: v }))}
-                      placeholder="Selecionar processo..."
-                      options={processes
-                        .filter((p) => p._orchestratorId === editForm.orchestratorId)
-                        .map((p) => ({ value: p.Key, label: p.Name, subtitle: `v${p.ProcessVersion}` }))}
-                      className="w-full"
-                    />
-                  </div>
-                </>
-              )}
+            {/* Conteúdo com scroll */}
+            <div className="overflow-y-auto flex-1 p-4 md:p-6">
+              <div className="space-y-4">
+                {/* Orchestrator + Robô (só na criação) */}
+                {isCreating && (
+                  <>
+                    <div>
+                      <label className="text-[10px] uppercase tracking-wider text-white/30 mb-1.5 block">Orchestrator</label>
+                      <CustomSelect
+                        value={editForm.orchestratorId}
+                        onChange={(v) => setEditForm((f) => ({ ...f, orchestratorId: v, releaseKey: "" }))}
+                        placeholder="Selecionar orchestrator..."
+                        options={orchestratorNames.map(([id, name]) => ({ value: id, label: name }))}
+                        className="w-full"
+                      />
+                    </div>
+                    <div>
+                      <label className="text-[10px] uppercase tracking-wider text-white/30 mb-1.5 block">Robô / Processo</label>
+                      <CustomSelect
+                        value={editForm.releaseKey}
+                        onChange={(v) => setEditForm((f) => ({ ...f, releaseKey: v }))}
+                        placeholder="Selecionar processo..."
+                        options={processes
+                          .filter((p) => p._orchestratorId === editForm.orchestratorId)
+                          .map((p) => ({ value: p.Key, label: p.Name, subtitle: `v${p.ProcessVersion}` }))}
+                        className="w-full"
+                      />
+                    </div>
+                  </>
+                )}
 
-              <div>
-                <label className="text-[10px] uppercase tracking-wider text-white/30 mb-1.5 block">Nome</label>
-                <input
-                  type="text"
-                  value={editForm.name}
-                  onChange={(e) => setEditForm((f) => ({ ...f, name: e.target.value }))}
-                  className="w-full bg-surface-900/60 border border-white/5 rounded-lg px-3 py-2 text-sm text-white/70 focus:outline-none focus:border-accent/30 focus:ring-1 focus:ring-accent/20"
+                <div>
+                  <label className="text-[10px] uppercase tracking-wider text-white/30 mb-1.5 block">Nome</label>
+                  <input
+                    type="text"
+                    value={editForm.name}
+                    onChange={(e) => setEditForm((f) => ({ ...f, name: e.target.value }))}
+                    className="w-full bg-surface-900/60 border border-white/5 rounded-lg px-3 py-2 text-sm text-white/70 focus:outline-none focus:border-accent/30 focus:ring-1 focus:ring-accent/20"
+                  />
+                </div>
+
+                <CronBuilder
+                  value={editForm.startProcessCron}
+                  onChange={(v) => setEditForm((f) => ({ ...f, startProcessCron: v }))}
                 />
-              </div>
 
-              <CronBuilder
-                value={editForm.startProcessCron}
-                onChange={(v) => setEditForm((f) => ({ ...f, startProcessCron: v }))}
-              />
+                <div>
+                  <label className="text-[10px] uppercase tracking-wider text-white/30 mb-1.5 block">Fuso Horário</label>
+                  <TimezoneSelect
+                    value={editForm.timeZoneId}
+                    onChange={(v) => setEditForm((f) => ({ ...f, timeZoneId: v }))}
+                    className="w-full"
+                  />
+                </div>
 
-              <div>
-                <label className="text-[10px] uppercase tracking-wider text-white/30 mb-1.5 block">Fuso Horário</label>
-                <TimezoneSelect
-                  value={editForm.timeZoneId}
-                  onChange={(v) => setEditForm((f) => ({ ...f, timeZoneId: v }))}
-                  className="w-full"
-                />
-              </div>
-
-              <div className="flex items-center gap-3">
-                <label className="text-[10px] uppercase tracking-wider text-white/30">Habilitado</label>
-                <button
-                  onClick={() => setEditForm((f) => ({ ...f, enabled: !f.enabled }))}
-                  className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg border text-xs font-medium cursor-pointer ${
-                    editForm.enabled
-                      ? "border-status-running/30 text-status-running bg-status-running/10"
-                      : "border-white/10 text-white/30 bg-white/5"
-                  }`}
-                >
-                  {editForm.enabled ? "Sim" : "Não"}
-                </button>
+                <div className="flex items-center gap-3">
+                  <label className="text-[10px] uppercase tracking-wider text-white/30">Habilitado</label>
+                  <button
+                    onClick={() => setEditForm((f) => ({ ...f, enabled: !f.enabled }))}
+                    className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg border text-xs font-medium cursor-pointer ${
+                      editForm.enabled
+                        ? "border-status-running/30 text-status-running bg-status-running/10"
+                        : "border-white/10 text-white/30 bg-white/5"
+                    }`}
+                  >
+                    {editForm.enabled ? "Sim" : "Não"}
+                  </button>
+                </div>
               </div>
             </div>
 
-            <div className="flex justify-end gap-2 mt-6">
+            {/* Footer fixo */}
+            <div className="flex justify-end gap-2 p-4 md:p-6 pt-0 shrink-0">
               <button
                 onClick={() => setEditingTrigger(null)}
                 className="px-4 py-2 rounded-lg border border-white/5 text-xs font-medium text-white/50 hover:text-white/80 cursor-pointer"

@@ -61,6 +61,20 @@ class ArchivedProcess(Base):
     process_key = Column(String, primary_key=True)
 
 
+class AuditLog(Base):
+    __tablename__ = "audit_logs"
+
+    id = Column(String, primary_key=True)
+    user_id = Column(String, ForeignKey("users.id"), nullable=False)
+    user_name = Column(String, nullable=False)
+    action = Column(String, nullable=False)  # start, stop, kill, restart, update
+    robot_name = Column(String, nullable=False)
+    orchestrator_id = Column(String, nullable=True)
+    orchestrator_name = Column(String, nullable=True)
+    detail = Column(Text, nullable=True)
+    created_at = Column(DateTime, server_default=func.now())
+
+
 class User(Base):
     __tablename__ = "users"
 

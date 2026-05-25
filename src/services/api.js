@@ -156,12 +156,12 @@ export async function fetchLogsByJob(jobKey, processName) {
 
 // ─── Job Actions ────────────────────────────────
 
-export async function startJob(orchestratorId, releaseKey) {
-  return postRequest("/jobs/start", { orchestratorId, releaseKey });
+export async function startJob(orchestratorId, releaseKey, robotName = null) {
+  return postRequest("/jobs/start", { orchestratorId, releaseKey, robotName });
 }
 
-export async function stopJob(orchestratorId, jobId, strategy = "SoftStop") {
-  return postRequest("/jobs/stop", { orchestratorId, jobId, strategy });
+export async function stopJob(orchestratorId, jobId, strategy = "SoftStop", robotName = null, actionType = null) {
+  return postRequest("/jobs/stop", { orchestratorId, jobId, strategy, robotName, actionType });
 }
 
 export async function resumeJob(orchestratorId, jobId) {
@@ -222,6 +222,10 @@ export async function updateTrigger(orchestratorId, triggerId, data) {
 
 export async function createTrigger(data) {
   return postRequest("/triggers/create", data);
+}
+
+export async function deleteTrigger(orchestratorId, triggerId) {
+  return postRequest("/triggers/delete", { orchestratorId, triggerId });
 }
 
 // ─── Archived Processes ──────────────────────────
@@ -298,4 +302,11 @@ export async function saveUserOrchestrators(userId, orchestratorIds) {
 
 export async function changePassword(currentPassword, newPassword) {
   return postRequest("/auth/change-password", { currentPassword, newPassword });
+}
+
+// ─── Audit Trail ───────────────────────────────
+
+export async function fetchAuditLogs({ top = 50, skip = 0 } = {}) {
+  const params = new URLSearchParams({ $top: top, $skip: skip });
+  return request(`${API_BASE}/audit?${params}`);
 }

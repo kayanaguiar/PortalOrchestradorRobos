@@ -32,6 +32,12 @@ const statusConfig = {
     bg: "bg-status-running",
     dotClass: "pulse-running",
   },
+  pending: {
+    label: "Pendente",
+    color: "text-status-paused",
+    bg: "bg-status-paused",
+    dotClass: "pulse-running",
+  },
   stopped: {
     label: "Parado",
     color: "text-status-stopped",
@@ -142,6 +148,17 @@ export default function RobotsPage({ robots, onAction, searchTerm: externalSearc
     pollingRef.current = setInterval(() => fetchJobsForRobot(false), pollingInterval * 1000);
     return () => clearInterval(pollingRef.current);
   }, [selectedRobot?.id, dateFilter, fetchJobsForRobot, pollingInterval]);
+
+  // Jobs ativos (Running + Pending) — usado na seção "Jobs ativos" do detalhe
+  const activeJobs = useMemo(
+    () => robotJobs
+      .filter((j) => j.State === "Running" || j.State === "Pending")
+      .sort((a, b) => {
+        if (a.State !== b.State) return a.State === "Running" ? -1 : 1;
+        return new Date(b.CreationTime) - new Date(a.CreationTime);
+      }),
+    [robotJobs]
+  );
 
   // Execuções derivadas dos Jobs (sem precisar de logs)
   const executions = useMemo(() => {
@@ -254,34 +271,15 @@ export default function RobotsPage({ robots, onAction, searchTerm: externalSearc
 
         {/* Robot header */}
         <div className="rounded-xl border border-white/5 bg-surface-800/60 p-6 mb-6">
-          <div className="flex items-start justify-between mb-6">
-            <div>
-              <div className="flex items-center gap-2 mb-2">
-                <div className={`w-2.5 h-2.5 rounded-full ${config.bg} ${config.dotClass}`} />
-                <span className={`font-mono text-xs uppercase tracking-widest ${config.color}`}>
-                  {config.label}
-                </span>
-              </div>
-              <h2 className="text-2xl font-bold text-white">{selectedRobot.name}</h2>
-              <p className="text-white/30 text-sm mt-1 font-mono">{selectedRobot.orchestrator}</p>
+          <div className="mb-6">
+            <div className="flex items-center gap-2 mb-2">
+              <div className={`w-2.5 h-2.5 rounded-full ${config.bg} ${config.dotClass}`} />
+              <span className={`font-mono text-xs uppercase tracking-widest ${config.color}`}>
+                {config.label}
+              </span>
             </div>
-            <div className="flex gap-2">
-              {selectedRobot.status === "running" && (
-                <>
-                  <ActionBtn icon={Square} label="Parar" variant="warning" onClick={() => onAction(selectedRobot.id, "stop")} />
-                  <ActionBtn icon={XOctagon} label="Encerrar" variant="danger" onClick={() => onAction(selectedRobot.id, "kill")} />
-                </>
-              )}
-              {selectedRobot.status === "stopped" && (
-                <ActionBtn icon={Play} label="Iniciar" variant="success" onClick={() => onAction(selectedRobot.id, "start")} />
-              )}
-              {selectedRobot.status === "error" && (
-                <>
-                  <ActionBtn icon={RotateCcw} label="Reiniciar" variant="accent" onClick={() => onAction(selectedRobot.id, "restart")} />
-                  <ActionBtn icon={Square} label="Parar" variant="danger" onClick={() => onAction(selectedRobot.id, "stop")} />
-                </>
-              )}
-            </div>
+            <h2 className="text-2xl font-bold text-white">{selectedRobot.name}</h2>
+            <p className="text-white/30 text-sm mt-1 font-mono">{selectedRobot.orchestrator}</p>
           </div>
 
           <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
@@ -290,6 +288,74 @@ export default function RobotsPage({ robots, onAction, searchTerm: externalSearc
             <InfoCard icon={Zap} label="Execuções Hoje" value={selectedRobot.executionsToday} />
             <InfoCard icon={TrendingUp} label="Taxa de Sucesso" value={`${selectedRobot.successRate}%`} />
           </div>
+        </div>
+
+        {/* Jobs ativos — Running + Pending listados separadamente, cada um com seus botões */}
+        <div className="rounded-xl border border-white/5 bg-surface-800/60 p-5 mb-6">
+          {jobsLoading ? (
+            <div className="flex items-center gap-2 text-white/20 text-xs font-mono">
+              <Loader2 className="w-3.5 h-3.5 animate-spin" />
+              Verificando jobs ativos...
+            </div>
+          ) : activeJobs.length > 0 ? (
+            <>
+              <div className="flex items-center justify-between mb-3">
+                <h3 className="text-sm font-semibold text-white">Jobs ativos</h3>
+                <span className="text-[11px] font-mono text-white/30">
+                  {activeJobs.length} {activeJobs.length === 1 ? "JOB" : "JOBS"}
+                </span>
+              </div>
+              <div className="space-y-2">
+                {activeJobs.map((job) => {
+                  const isRunning = job.State === "Running";
+                  return (
+                    <div key={job.Id} className="flex items-center gap-3 px-3 py-2.5 rounded-lg bg-surface-900/60 border border-white/5">
+                      <div className={`w-2 h-2 rounded-full shrink-0 ${
+                        isRunning ? "bg-status-running pulse-running" : "bg-status-paused pulse-running"
+                      }`} />
+                      <div className="flex-1 min-w-0">
+                        <div className="flex items-center gap-2 flex-wrap">
+                          <span className={`text-[10px] font-mono uppercase tracking-wider ${
+                            isRunning ? "text-status-running" : "text-status-paused"
+                          }`}>
+                            {isRunning ? "Executando" : "Na fila"}
+                          </span>
+                          <span className="font-mono text-[10px] text-white/30 truncate">
+                            {job.HostMachineName || "—"}
+                          </span>
+                        </div>
+                        <p className="text-[10px] text-white/20 font-mono mt-0.5">
+                          {isRunning ? "Iniciado " : "Enfileirado "}{formatDateTime(job.StartTime || job.CreationTime)}
+                        </p>
+                      </div>
+                      <div className="flex gap-1.5 shrink-0">
+                        {isRunning ? (
+                          <>
+                            <ActionBtn icon={Square} label="Parar" variant="warning" onClick={() => onAction(selectedRobot.id, "stop", job.Id)} />
+                            <ActionBtn icon={XOctagon} label="Encerrar" variant="danger" onClick={() => onAction(selectedRobot.id, "kill", job.Id)} />
+                          </>
+                        ) : (
+                          <ActionBtn icon={XOctagon} label="Cancelar" variant="danger" onClick={() => onAction(selectedRobot.id, "cancel", job.Id)} />
+                        )}
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            </>
+          ) : (
+            <div className="flex items-center justify-between gap-3">
+              <div>
+                <h3 className="text-sm font-semibold text-white">Nenhum job ativo</h3>
+                <p className="text-[11px] font-mono text-white/30 mt-0.5">SEM EXECUÇÃO OU FILA NO MOMENTO</p>
+              </div>
+              {selectedRobot.status === "error" ? (
+                <ActionBtn icon={RotateCcw} label="Reiniciar" variant="accent" onClick={() => onAction(selectedRobot.id, "restart")} />
+              ) : (
+                <ActionBtn icon={Play} label="Iniciar" variant="success" onClick={() => onAction(selectedRobot.id, "start")} />
+              )}
+            </div>
+          )}
         </div>
 
         {/* Logs by execution */}

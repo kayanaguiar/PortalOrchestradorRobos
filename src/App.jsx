@@ -1,30 +1,34 @@
-import { useState, useEffect, useCallback, useMemo, useRef } from "react";
+import { useState, useEffect, useCallback, useMemo, useRef, lazy, Suspense } from "react";
 import { Routes, Route, useNavigate, useLocation } from "react-router-dom";
 import Sidebar from "./components/Sidebar";
 import Header from "./components/Header";
 import StatsPanel from "./components/StatsPanel";
 import SortableRobotCard from "./components/SortableRobotCard";
 import ActivityTable from "./components/ActivityTable";
-import RobotsPage from "./components/pages/RobotsPage";
-import LogsPage from "./components/pages/LogsPage";
-import SettingsPage from "./components/pages/SettingsPage";
-import TriggersPage from "./components/pages/TriggersPage";
-import UsersPage from "./components/pages/UsersPage";
 import ChangePasswordModal from "./components/ChangePasswordModal";
 import { useUiPathLogs, useUiPathJobs, useUiPathProcesses, useUiPathSessions, useUiPathHealth } from "./hooks/useUiPathData";
 import useMediaQuery from "./hooks/useMediaQuery";
 import ConfirmModal from "./components/ConfirmModal";
 import Toast from "./components/Toast";
 import { startJob, stopJob, fetchSettings, fetchProcessVersions, updateProcessVersion, fetchProcessUpdates, fetchArchivedProcesses, toggleArchivedProcess, login, logout, getStoredUser } from "./services/api";
-import LoginPage from "./components/pages/LoginPage";
 import { DndContext, closestCenter, PointerSensor, TouchSensor, useSensor, useSensors } from "@dnd-kit/core";
 import { SortableContext, rectSortingStrategy, arrayMove } from "@dnd-kit/sortable";
+
+// Lazy-loaded pages
+const LoginPage = lazy(() => import("./components/pages/LoginPage"));
+const RobotsPage = lazy(() => import("./components/pages/RobotsPage"));
+const LogsPage = lazy(() => import("./components/pages/LogsPage"));
+const SettingsPage = lazy(() => import("./components/pages/SettingsPage"));
+const TriggersPage = lazy(() => import("./components/pages/TriggersPage"));
+const UsersPage = lazy(() => import("./components/pages/UsersPage"));
+const AuditPage = lazy(() => import("./components/pages/AuditPage"));
 
 const pageConfig = {
   "/": { id: "dashboard", title: "Dashboard", subtitle: "VISÃO GERAL" },
   "/robots": { id: "robots", title: "Robôs", subtitle: "GERENCIAMENTO E DETALHES" },
   "/history": { id: "logs", title: "Histórico de Jobs", subtitle: "EXECUÇÕES DE TODOS OS ROBÔS" },
   "/triggers": { id: "triggers", title: "Gatilhos", subtitle: "AGENDAMENTOS E TRIGGERS" },
+  "/audit": { id: "audit", title: "Auditoria", subtitle: "HISTÓRICO DE AÇÕES" },
   "/users": { id: "users", title: "Usuários", subtitle: "GERENCIAMENTO DE ACESSOS" },
   "/settings": { id: "settings", title: "Configurações", subtitle: "ORCHESTRATORS E CONEXÕES" },
 };
@@ -32,13 +36,20 @@ const pageConfig = {
 function mapJobStatus(state) {
   switch (state) {
     case "Running": return "running";
-    case "Pending": return "running";
+    case "Pending": return "pending";
     case "Suspended": return "stopped";
     case "Successful": return "stopped";
     case "Stopped": return "stopped";
     case "Faulted": return "error";
     default: return "stopped";
   }
+}
+
+function jobPriority(state) {
+  if (state === "Running") return 3;
+  if (state === "Pending") return 2;
+  if (state === "Suspended") return 1;
+  return 0;
 }
 
 function buildRobots(releases, jobs, logs, updates = {}) {
@@ -65,13 +76,22 @@ function buildRobots(releases, jobs, logs, updates = {}) {
     }
   }
 
-  // Job mais recente por processo
+  // Job principal por processo — Running > Pending > Suspended > finalizados; empate: mais recente
+  // (Running prevalece sobre Pending mesmo que o Pending seja mais novo, senão a fila esconde o job em execução)
   const latestJobByProcess = {};
   for (const job of jobs) {
     const key = `${job._orchestratorId}::${job.ReleaseName}`;
     const existing = latestJobByProcess[key];
-    if (!existing || new Date(job.CreationTime) > new Date(existing.CreationTime)) {
+    if (!existing) {
       latestJobByProcess[key] = job;
+    } else {
+      const newP = jobPriority(job.State);
+      const oldP = jobPriority(existing.State);
+      if (newP > oldP) {
+        latestJobByProcess[key] = job;
+      } else if (newP === oldP && new Date(job.CreationTime) > new Date(existing.CreationTime)) {
+        latestJobByProcess[key] = job;
+      }
     }
   }
 
@@ -178,7 +198,7 @@ export default function App() {
   };
 
   if (!user) {
-    return <LoginPage onLogin={handleLogin} />;
+    return <Suspense fallback={null}><LoginPage onLogin={handleLogin} /></Suspense>;
   }
 
   return <AuthenticatedApp user={user} onLogout={handleLogout} />;
@@ -253,6 +273,10 @@ function AuthenticatedApp({ user, onLogout }) {
     useSensor(PointerSensor, { activationConstraint: { distance: 8 } }),
     useSensor(TouchSensor, { activationConstraint: { delay: 200, tolerance: 5 } }),
   );
+
+  // Batch selection (state only — handlers after sortedRobots)
+  const [selectedRobots, setSelectedRobots] = useState(new Set());
+  const [batchMode, setBatchMode] = useState(false);
 
   const [pendingAction, setPendingAction] = useState(null);
   const [toasts, setToasts] = useState([]);
@@ -381,6 +405,28 @@ function AuthenticatedApp({ user, onLogout }) {
     localStorage.setItem("cardOrder", JSON.stringify(newOrder));
   }, [sortedRobots]);
 
+  // Batch selection handlers
+  const toggleSelectRobot = useCallback((processKey) => {
+    setSelectedRobots((prev) => {
+      const next = new Set(prev);
+      if (next.has(processKey)) next.delete(processKey); else next.add(processKey);
+      return next;
+    });
+  }, []);
+
+  const selectAll = useCallback(() => {
+    setSelectedRobots(new Set(sortedRobots.map((r) => r.processKey)));
+  }, [sortedRobots]);
+
+  const deselectAll = useCallback(() => {
+    setSelectedRobots(new Set());
+  }, []);
+
+  const exitBatchMode = useCallback(() => {
+    setBatchMode(false);
+    setSelectedRobots(new Set());
+  }, []);
+
   const filteredLogs = useMemo(
     () => search
       ? activityLogs.filter((l) =>
@@ -392,9 +438,10 @@ function AuthenticatedApp({ user, onLogout }) {
     [activityLogs, search]
   );
 
-  const executeAction = useCallback(async (robotId, action) => {
+  const executeAction = useCallback(async (robotId, action, overrideJobId = null) => {
     const robot = robots.find((r) => r.id === robotId);
     if (!robot?.orchestratorId) return;
+    const targetJobId = overrideJobId || robot.jobId;
 
     setActionLoading(robotId);
     try {
@@ -402,19 +449,24 @@ function AuthenticatedApp({ user, onLogout }) {
         case "start":
         case "restart":
           if (robot.releaseKey) {
-            await startJob(robot.orchestratorId, robot.releaseKey);
+            await startJob(robot.orchestratorId, robot.releaseKey, robot.name);
           } else {
             console.error("Sem releaseKey para iniciar o job.");
           }
           break;
         case "stop":
-          if (robot.jobId) {
-            await stopJob(robot.orchestratorId, robot.jobId, "SoftStop");
+          if (targetJobId) {
+            await stopJob(robot.orchestratorId, targetJobId, "SoftStop", robot.name, "stop");
           }
           break;
         case "kill":
-          if (robot.jobId) {
-            await stopJob(robot.orchestratorId, robot.jobId, "Kill");
+          if (targetJobId) {
+            await stopJob(robot.orchestratorId, targetJobId, "Kill", robot.name, "kill");
+          }
+          break;
+        case "cancel":
+          if (targetJobId) {
+            await stopJob(robot.orchestratorId, targetJobId, "SoftStop", robot.name, "cancel");
           }
           break;
         case "update":
@@ -434,6 +486,7 @@ function AuthenticatedApp({ user, onLogout }) {
         restart: `Job "${robot.name}" reiniciado com sucesso`,
         stop: `Job "${robot.name}" parado com sucesso`,
         kill: `Job "${robot.name}" encerrado`,
+        cancel: `Job pendente "${robot.name}" cancelado`,
         update: `"${robot.name}" atualizado para a última versão`,
       };
       addToast("success", messages[action] || "Ação executada com sucesso");
@@ -443,6 +496,7 @@ function AuthenticatedApp({ user, onLogout }) {
         restart: "Erro ao reiniciar",
         stop: "Erro ao parar",
         kill: "Erro ao encerrar",
+        cancel: "Erro ao cancelar",
         update: "Erro ao atualizar versão",
       };
       addToast("error", `${messages[action] || "Erro"}: ${err.message}`);
@@ -472,29 +526,65 @@ function AuthenticatedApp({ user, onLogout }) {
     });
   }, [addToast]);
 
-  const handleAction = useCallback((robotId, action) => {
+  const handleAction = useCallback((robotId, action, jobId = null) => {
     const robot = robots.find((r) => r.id === robotId);
     if (!robot) return;
 
     // Ações perigosas pedem confirmação
-    if (action === "stop" || action === "kill" || action === "restart") {
-      setPendingAction({ robotId, action, robotName: robot.name });
+    if (action === "stop" || action === "kill" || action === "restart" || action === "cancel") {
+      setPendingAction({ robotId, action, robotName: robot.name, jobId });
       return;
     }
 
-    executeAction(robotId, action);
+    executeAction(robotId, action, jobId);
   }, [robots, executeAction]);
-
-  const handleConfirmAction = useCallback(() => {
-    if (pendingAction) {
-      executeAction(pendingAction.robotId, pendingAction.action);
-      setPendingAction(null);
-    }
-  }, [pendingAction, executeAction]);
 
   const handleCancelAction = useCallback(() => {
     setPendingAction(null);
   }, []);
+
+  const executeBatchAction = useCallback(async (action) => {
+    const selected = robots.filter((r) => selectedRobots.has(r.processKey));
+    if (selected.length === 0) return;
+
+    const results = await Promise.allSettled(
+      selected.map((robot) => executeAction(robot.id, action))
+    );
+    const failed = results.filter((r) => r.status === "rejected").length;
+    if (failed > 0) {
+      addToast("error", `${failed} de ${selected.length} ações falharam`);
+    }
+    exitBatchMode();
+  }, [robots, selectedRobots, executeAction, addToast, exitBatchMode]);
+
+  const handleBatchAction = useCallback((action) => {
+    const selected = robots.filter((r) => selectedRobots.has(r.processKey));
+    if (selected.length === 0) return;
+
+    if (action === "stop" || action === "kill") {
+      const names = selected.map((r) => r.name).join(", ");
+      setPendingAction({
+        robotId: "__batch__",
+        action,
+        robotName: names,
+        isBatch: true,
+      });
+      return;
+    }
+    executeBatchAction(action);
+  }, [robots, selectedRobots, executeBatchAction]);
+
+  // Override confirm para batch
+  const handleConfirmActionFull = useCallback(() => {
+    if (!pendingAction) return;
+    if (pendingAction.isBatch) {
+      executeBatchAction(pendingAction.action);
+      setPendingAction(null);
+    } else {
+      executeAction(pendingAction.robotId, pendingAction.action, pendingAction.jobId);
+      setPendingAction(null);
+    }
+  }, [pendingAction, executeAction, executeBatchAction]);
 
   const [refreshing, setRefreshing] = useState(false);
   const refreshAll = useCallback(async () => {
@@ -540,6 +630,27 @@ function AuthenticatedApp({ user, onLogout }) {
               timestamp: job.EndTime || job.CreationTime,
               robotId: matchedRobot?.id || null,
             });
+          }
+        }
+      }
+
+      // Robôs que não executaram hoje (após 10h)
+      const currentHour = new Date().getHours();
+      if (currentHour >= 10 && robots.length > 0) {
+        for (const robot of robots) {
+          if (archivedProcesses.has(robot.processKey)) continue;
+          if (robot.executionsToday === 0 && robot.status !== "running" && robot.status !== "pending") {
+            const id = `idle-${robot.processKey}`;
+            if (!existingIds.has(id)) {
+              newItems.push({
+                id,
+                type: "warning",
+                title: `Sem execuções hoje: ${robot.name}`,
+                detail: `${robot.orchestrator} — nenhuma execução registrada hoje`,
+                timestamp: new Date().toISOString(),
+                robotId: robot.id,
+              });
+            }
           }
         }
       }
@@ -638,7 +749,7 @@ function AuthenticatedApp({ user, onLogout }) {
                 <path d="m4.93 4.93 2.83 2.83m8.48 8.48 2.83 2.83M4.93 19.07l2.83-2.83m8.48-8.48 2.83-2.83" />
               </svg>
             </div>
-            <div className="absolute -top-1 -right-1 left-0 right-0 mx-auto w-20 h-20 rounded-2xl border border-accent/20 animate-ping opacity-20" />
+            <div className="absolute -top-1 -left-1 w-20 h-20 rounded-2xl border border-accent/20 animate-ping opacity-20" />
           </div>
           <h1 className="font-display text-xl font-bold text-white mb-2">RoboCommand</h1>
           <p className="font-mono text-xs text-white/30 mb-6">CONECTANDO AOS ORCHESTRATORS...</p>
@@ -680,7 +791,7 @@ function AuthenticatedApp({ user, onLogout }) {
   return (
     <div className="min-h-screen hud-grid scanline">
       <Sidebar activePage={activePage} onNavigate={(id) => {
-        const routes = { dashboard: "/", robots: "/robots", logs: "/history", triggers: "/triggers", users: "/users", settings: "/settings" };
+        const routes = { dashboard: "/", robots: "/robots", logs: "/history", triggers: "/triggers", audit: "/audit", users: "/users", settings: "/settings" };
         navigate(routes[id] || "/");
         if (isMobile) setMobileMenuOpen(false);
       }} collapsed={isMobile ? false : sidebarCollapsed} onToggle={toggleSidebar} userRole={user.role}
@@ -710,6 +821,12 @@ function AuthenticatedApp({ user, onLogout }) {
           onMenuToggle={() => setMobileMenuOpen((o) => !o)}
         />
 
+        <Suspense fallback={
+          <div className="flex items-center justify-center py-20 text-white/20 text-sm font-mono gap-2">
+            <div className="w-4 h-4 border-2 border-white/10 border-t-accent rounded-full animate-spin" />
+            Carregando...
+          </div>
+        }>
         <Routes>
           <Route path="/" element={
             <div className="space-y-6">
@@ -717,6 +834,27 @@ function AuthenticatedApp({ user, onLogout }) {
               <div>
                 <div className="flex items-center justify-between mb-4">
                   <h2 className="text-sm font-semibold text-white">Visão dos Robôs</h2>
+                  {user.role !== "viewer" && (
+                    <div className="flex items-center gap-2">
+                      {batchMode ? (
+                        <>
+                          <button onClick={selectedRobots.size === sortedRobots.length ? deselectAll : selectAll}
+                            className="text-[11px] font-mono text-accent hover:text-accent-light transition-colors cursor-pointer">
+                            {selectedRobots.size === sortedRobots.length ? "Desmarcar todos" : "Selecionar todos"}
+                          </button>
+                          <button onClick={exitBatchMode}
+                            className="text-[11px] font-mono text-white/30 hover:text-white/60 transition-colors cursor-pointer">
+                            Cancelar
+                          </button>
+                        </>
+                      ) : (
+                        <button onClick={() => setBatchMode(true)}
+                          className="text-[11px] font-mono text-white/30 hover:text-white/60 transition-colors cursor-pointer">
+                          Selecionar
+                        </button>
+                      )}
+                    </div>
+                  )}
                 </div>
                 <DndContext sensors={dndSensors} collisionDetection={closestCenter} onDragEnd={handleDragEnd}>
                   <SortableContext items={sortedRobots.map((r) => r.processKey)} strategy={rectSortingStrategy}>
@@ -728,11 +866,13 @@ function AuthenticatedApp({ user, onLogout }) {
                           index={i}
                           onAction={handleAction}
                           onArchive={handleArchive}
-                          onClick={() => handleRobotClick(robot.id)}
+                          onClick={batchMode ? () => toggleSelectRobot(robot.processKey) : () => handleRobotClick(robot.id)}
                           loading={actionLoading === robot.id}
                           userRole={user.role}
                           isFavorite={favorites.has(robot.processKey)}
                           onToggleFavorite={toggleFavorite}
+                          batchMode={batchMode}
+                          selected={selectedRobots.has(robot.processKey)}
                         />
                       ))}
                       {filteredRobots.length === 0 && !logsLoading && (
@@ -744,6 +884,28 @@ function AuthenticatedApp({ user, onLogout }) {
                   </SortableContext>
                 </DndContext>
               </div>
+              {/* Barra de ações em lote */}
+              {batchMode && selectedRobots.size > 0 && (
+                <div className="fixed bottom-6 left-1/2 -translate-x-1/2 z-50 flex items-center gap-3 px-5 py-3 rounded-xl border border-white/10 bg-surface-800/95 backdrop-blur-sm shadow-2xl">
+                  <span className="text-xs font-mono text-white/50">
+                    {selectedRobots.size} selecionado{selectedRobots.size !== 1 ? "s" : ""}
+                  </span>
+                  <div className="w-px h-5 bg-white/10" />
+                  <button onClick={() => handleBatchAction("start")}
+                    className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-status-running/30 text-status-running text-xs font-medium hover:bg-status-running/10 transition-all cursor-pointer">
+                    Iniciar
+                  </button>
+                  <button onClick={() => handleBatchAction("stop")}
+                    className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-status-paused/30 text-status-paused text-xs font-medium hover:bg-status-paused/10 transition-all cursor-pointer">
+                    Parar
+                  </button>
+                  <button onClick={() => handleBatchAction("kill")}
+                    className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-status-error/30 text-status-error text-xs font-medium hover:bg-status-error/10 transition-all cursor-pointer">
+                    Encerrar
+                  </button>
+                </div>
+              )}
+
               <ActivityTable logs={filteredLogs} pageSize={logPageSize} onPageSizeChange={setLogPageSize} />
             </div>
           } />
@@ -762,6 +924,11 @@ function AuthenticatedApp({ user, onLogout }) {
           <Route path="/triggers" element={
             <TriggersPage addToast={addToast} userRole={user.role} />
           } />
+          {user.role === "admin" && (
+            <Route path="/audit" element={
+              <AuditPage />
+            } />
+          )}
           {user.role === "admin" && (
             <Route path="/users" element={
               <UsersPage addToast={addToast} />
@@ -783,6 +950,7 @@ function AuthenticatedApp({ user, onLogout }) {
             </div>
           } />
         </Routes>
+        </Suspense>
       </main>
 
       <ConfirmModal
@@ -790,6 +958,7 @@ function AuthenticatedApp({ user, onLogout }) {
         title={
           pendingAction?.action === "kill" ? "Encerrar robô"
           : pendingAction?.action === "stop" ? "Parar robô"
+          : pendingAction?.action === "cancel" ? "Cancelar job pendente"
           : "Reiniciar robô"
         }
         message={
@@ -797,15 +966,18 @@ function AuthenticatedApp({ user, onLogout }) {
             ? `Tem certeza que deseja ENCERRAR o robô "${pendingAction?.robotName}"?\n\nO processo será interrompido imediatamente (Kill), sem esperar um ponto seguro. Dados em processamento podem ser perdidos.`
             : pendingAction?.action === "stop"
               ? `Tem certeza que deseja PARAR o robô "${pendingAction?.robotName}"?\n\nO robô será parado de forma segura (SoftStop), finalizando a atividade atual antes de encerrar.`
-              : `Tem certeza que deseja REINICIAR o robô "${pendingAction?.robotName}"?\n\nUm novo job será iniciado para este processo.`
+              : pendingAction?.action === "cancel"
+                ? `Tem certeza que deseja CANCELAR o job pendente "${pendingAction?.robotName}"?\n\nO job será removido da fila antes de iniciar a execução.`
+                : `Tem certeza que deseja REINICIAR o robô "${pendingAction?.robotName}"?\n\nUm novo job será iniciado para este processo.`
         }
         confirmLabel={
           pendingAction?.action === "kill" ? "Encerrar"
           : pendingAction?.action === "stop" ? "Parar"
+          : pendingAction?.action === "cancel" ? "Cancelar"
           : "Reiniciar"
         }
         variant="danger"
-        onConfirm={handleConfirmAction}
+        onConfirm={handleConfirmActionFull}
         onCancel={handleCancelAction}
       />
 

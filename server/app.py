@@ -117,6 +117,22 @@ async def uipath_patch(orch: dict, endpoint: str, body: dict | None = None) -> d
         return response.json()
 
 
+async def uipath_delete(orch: dict, endpoint: str) -> dict:
+    """Faz uma requisição DELETE autenticada a um orchestrator."""
+    token = await get_token(orch["id"], orch["clientId"], orch["clientSecret"])
+    async with httpx.AsyncClient(timeout=30.0) as client:
+        response = await client.delete(
+            f"{orch['baseUrl']}/{endpoint}",
+            headers={
+                "Authorization": f"Bearer {token}",
+                "X-UIPATH-OrganizationUnitId": orch["folderId"],
+            },
+        )
+        if response.status_code not in (200, 204):
+            raise HTTPException(status_code=response.status_code, detail=response.text)
+        return {"status": "ok"}
+
+
 async def request_all_orchestrators(endpoint: str, params: dict | None = None, user: dict | None = None) -> list:
     """Faz a mesma requisição em todos os orchestrators em PARALELO e combina os resultados."""
     import asyncio
@@ -309,12 +325,43 @@ def _find_orchestrator(orchestrator_id: str, user: dict | None = None) -> dict:
 class StartJobRequest(BaseModel):
     orchestratorId: str
     releaseKey: str  # Key do Release/Process a iniciar
+    robotName: str | None = None  # Nome do robô (para audit)
 
 
 class JobActionRequest(BaseModel):
     orchestratorId: str
     jobId: int
     strategy: str = "SoftStop"  # SoftStop ou Kill
+    robotName: str | None = None  # Nome do robô (para audit)
+    actionType: str | None = None  # cancel, stop, kill (para audit)
+
+
+def _save_audit(user: dict, action: str, robot_name: str, orchestrator_id: str = None, orchestrator_name: str = None, detail: str = None):
+    """Salva uma entrada no audit log."""
+    import uuid
+    from models import AuditLog, User
+    db = SessionLocal()
+    try:
+        user_name = user.get("email", "—")
+        db_user = db.query(User).filter_by(id=user.get("sub", "")).first()
+        if db_user:
+            user_name = db_user.name
+        log = AuditLog(
+            id=str(uuid.uuid4()),
+            user_id=user.get("sub", ""),
+            user_name=user_name,
+            action=action,
+            robot_name=robot_name,
+            orchestrator_id=orchestrator_id,
+            orchestrator_name=orchestrator_name,
+            detail=detail,
+        )
+        db.add(log)
+        db.commit()
+    except Exception:
+        db.rollback()
+    finally:
+        db.close()
 
 
 @app.post("/api/jobs/start")
@@ -332,6 +379,7 @@ async def start_job(request: Request, req: StartJobRequest, _user: dict = Depend
     }
     result = await uipath_post(orch, "Jobs/UiPath.Server.Configuration.OData.StartJobs", body)
     clear_cache()
+    _save_audit(_user, "start", req.robotName or req.releaseKey, req.orchestratorId, orch.get("name"))
     return result
 
 
@@ -346,7 +394,50 @@ async def stop_job(request: Request, req: JobActionRequest, _user: dict = Depend
     }
     result = await uipath_post(orch, "Jobs/UiPath.Server.Configuration.OData.StopJobs", body)
     clear_cache()
+    action = req.actionType or ("kill" if req.strategy == "Kill" else "stop")
+    _save_audit(_user, action, req.robotName or str(req.jobId), req.orchestratorId, orch.get("name"))
     return result
+
+
+# ─── Audit Trail ──────────────────────────────────────────
+
+@app.get("/api/audit")
+async def get_audit_logs(
+    top: int = Query(50, alias="$top"),
+    skip: int = Query(0, alias="$skip"),
+    _user: dict = Depends(require_admin),
+):
+    """Retorna histórico de ações."""
+    from models import AuditLog
+    db = SessionLocal()
+    try:
+        total = db.query(AuditLog).count()
+        logs = (
+            db.query(AuditLog)
+            .order_by(AuditLog.created_at.desc())
+            .offset(skip)
+            .limit(top)
+            .all()
+        )
+        return {
+            "value": [
+                {
+                    "id": l.id,
+                    "userId": l.user_id,
+                    "userName": l.user_name,
+                    "action": l.action,
+                    "robotName": l.robot_name,
+                    "orchestratorId": l.orchestrator_id,
+                    "orchestratorName": l.orchestrator_name,
+                    "detail": l.detail,
+                    "createdAt": l.created_at.isoformat() if l.created_at else None,
+                }
+                for l in logs
+            ],
+            "total": total,
+        }
+    finally:
+        db.close()
 
 
 
@@ -652,6 +743,20 @@ async def update_trigger(req: UpdateTriggerRequest, _user: dict = Depends(requir
     current["Enabled"] = req.enabled
     current = _clean_schedule_for_put(current)
     result = await uipath_put(orch, f"ProcessSchedules({req.triggerId})", current)
+    clear_cache()
+    return result
+
+
+class DeleteTriggerRequest(BaseModel):
+    orchestratorId: str
+    triggerId: int
+
+
+@app.post("/api/triggers/delete")
+async def delete_trigger(req: DeleteTriggerRequest, _user: dict = Depends(require_operator)):
+    """Exclui um gatilho (ProcessSchedule) do UiPath."""
+    orch = _find_orchestrator(req.orchestratorId, user=_user)
+    result = await uipath_delete(orch, f"ProcessSchedules({req.triggerId})")
     clear_cache()
     return result
 

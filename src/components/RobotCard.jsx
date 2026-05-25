@@ -23,6 +23,13 @@ const statusConfig = {
     glow: "glow-running",
     dotClass: "pulse-running",
   },
+  pending: {
+    label: "Pendente",
+    color: "text-status-paused",
+    bg: "bg-status-paused",
+    glow: "",
+    dotClass: "pulse-running",
+  },
   stopped: {
     label: "Parado",
     color: "text-status-stopped",
@@ -217,6 +224,14 @@ export default function RobotCard({ robot, index, onAction, onArchive, onClick, 
                 variant="danger"
               />
             </>
+          )}
+          {!loading && robot.status === "pending" && (
+            <ActionButton
+              icon={XOctagon}
+              label="Cancelar"
+              onClick={() => onAction(robot.id, "cancel")}
+              variant="danger"
+            />
           )}
           {!loading && robot.status === "stopped" && (
             <ActionButton

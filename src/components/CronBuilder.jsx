@@ -1,5 +1,6 @@
 import { useState, useEffect, useMemo } from "react";
 import { Code, MousePointerClick } from "lucide-react";
+import CustomSelect from "./CustomSelect";
 
 const WEEKDAYS = [
   { value: "MON", label: "Seg" },
@@ -174,49 +175,54 @@ export default function CronBuilder({ value, onChange }) {
           {/* Interval (for minutes) */}
           {frequency === "minutes" && (
             <div className="flex items-center gap-2">
-              <span className="text-xs text-white/40">A cada</span>
-              <select value={interval} onChange={(e) => setInterval_(Number(e.target.value))} className={inputClass}>
-                {[5, 10, 15, 20, 30, 45, 60].map((v) => (
-                  <option key={v} value={v}>{v}</option>
-                ))}
-              </select>
-              <span className="text-xs text-white/40">minutos</span>
+              <span className="text-xs text-white/40 shrink-0">A cada</span>
+              <CustomSelect
+                value={interval}
+                onChange={(v) => setInterval_(Number(v))}
+                options={[5, 10, 15, 20, 30, 45, 60].map((v) => ({ value: v, label: String(v) }))}
+                className="w-24"
+              />
+              <span className="text-xs text-white/40 shrink-0">minutos</span>
             </div>
           )}
 
           {/* Time range (for minutes/hourly) */}
           {(frequency === "minutes" || frequency === "hourly") && (
             <div className="flex items-center gap-2">
-              <span className="text-xs text-white/40">Das</span>
-              <select value={hour} onChange={(e) => setHour(Number(e.target.value))} className={inputClass}>
-                {Array.from({ length: 24 }, (_, i) => (
-                  <option key={i} value={i}>{String(i).padStart(2, "0")}:00</option>
-                ))}
-              </select>
-              <span className="text-xs text-white/40">às</span>
-              <select value={hourEnd} onChange={(e) => setHourEnd(Number(e.target.value))} className={inputClass}>
-                {Array.from({ length: 24 }, (_, i) => (
-                  <option key={i} value={i}>{String(i).padStart(2, "0")}:00</option>
-                ))}
-              </select>
+              <span className="text-xs text-white/40 shrink-0">Das</span>
+              <CustomSelect
+                value={hour}
+                onChange={(v) => setHour(Number(v))}
+                options={Array.from({ length: 24 }, (_, i) => ({ value: i, label: `${String(i).padStart(2, "0")}:00` }))}
+                className="w-24"
+              />
+              <span className="text-xs text-white/40 shrink-0">às</span>
+              <CustomSelect
+                value={hourEnd}
+                onChange={(v) => setHourEnd(Number(v))}
+                options={Array.from({ length: 24 }, (_, i) => ({ value: i, label: `${String(i).padStart(2, "0")}:00` }))}
+                className="w-24"
+              />
             </div>
           )}
 
           {/* Specific time (for daily/weekly) */}
           {(frequency === "daily" || frequency === "weekly") && (
             <div className="flex items-center gap-2">
-              <span className="text-xs text-white/40">Às</span>
-              <select value={hour} onChange={(e) => setHour(Number(e.target.value))} className={inputClass}>
-                {Array.from({ length: 24 }, (_, i) => (
-                  <option key={i} value={i}>{String(i).padStart(2, "0")}</option>
-                ))}
-              </select>
-              <span className="text-xs text-white/40">:</span>
-              <select value={minute} onChange={(e) => setMinute(Number(e.target.value))} className={inputClass}>
-                {[0, 5, 10, 15, 20, 25, 30, 35, 40, 45, 50, 55].map((v) => (
-                  <option key={v} value={v}>{String(v).padStart(2, "0")}</option>
-                ))}
-              </select>
+              <span className="text-xs text-white/40 shrink-0">Às</span>
+              <CustomSelect
+                value={hour}
+                onChange={(v) => setHour(Number(v))}
+                options={Array.from({ length: 24 }, (_, i) => ({ value: i, label: String(i).padStart(2, "0") }))}
+                className="w-20"
+              />
+              <span className="text-xs text-white/40 shrink-0">:</span>
+              <CustomSelect
+                value={minute}
+                onChange={(v) => setMinute(Number(v))}
+                options={[0, 5, 10, 15, 20, 25, 30, 35, 40, 45, 50, 55].map((v) => ({ value: v, label: String(v).padStart(2, "0") }))}
+                className="w-20"
+              />
             </div>
           )}
 

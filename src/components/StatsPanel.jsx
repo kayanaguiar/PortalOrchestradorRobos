@@ -19,10 +19,23 @@ export default function StatsPanel({ robots, jobs, sessions }) {
   const [panelPos, setPanelPos] = useState({ top: 0, left: 0 });
 
   useEffect(() => {
-    if (showAssistants && assistantCardRef.current) {
-      const rect = assistantCardRef.current.getBoundingClientRect();
-      setPanelPos({ top: rect.bottom + 8, left: rect.left });
+    if (!showAssistants) return;
+
+    function updatePosition() {
+      if (assistantCardRef.current) {
+        const rect = assistantCardRef.current.getBoundingClientRect();
+        setPanelPos({ top: rect.bottom + 8, left: rect.left });
+      }
     }
+
+    updatePosition();
+    window.addEventListener("scroll", updatePosition, true);
+    window.addEventListener("resize", updatePosition);
+
+    return () => {
+      window.removeEventListener("scroll", updatePosition, true);
+      window.removeEventListener("resize", updatePosition);
+    };
   }, [showAssistants]);
 
   useEffect(() => {

@@ -133,7 +133,7 @@ export default function SettingsPage({ pollingInterval, onPollingChange, searchT
   };
 
   return (
-    <div className="space-y-6">
+    <div className="space-y-6 pb-20">
       {loadError && (
         <div className="px-4 py-3 rounded-lg border border-status-paused/30 bg-status-paused/10 text-status-paused text-xs font-mono">
           {loadError}
@@ -359,26 +359,28 @@ export default function SettingsPage({ pollingInterval, onPollingChange, searchT
         </>
       )}
 
-      {/* Save button */}
-      <div className="flex items-center justify-end gap-3">
-        {saveStatus === "ok" && (
-          <span className="flex items-center gap-1.5 text-xs text-status-running font-mono">
-            <CheckCircle2 className="w-3.5 h-3.5" /> Salvo com sucesso
-          </span>
-        )}
-        {saveStatus === "error" && (
-          <span className="flex items-center gap-1.5 text-xs text-status-error font-mono">
-            <XCircle className="w-3.5 h-3.5" /> Erro ao salvar
-          </span>
-        )}
-        <button
-          onClick={handleSave}
-          disabled={saving}
-          className="flex items-center gap-2 px-5 py-2.5 rounded-lg bg-accent text-white text-sm font-medium hover:bg-accent-light transition-all cursor-pointer disabled:opacity-50"
-        >
-          {saving ? <Loader2 className="w-4 h-4 animate-spin" /> : <Save className="w-4 h-4" />}
-          Salvar Configurações
-        </button>
+      {/* Save button — fixo no rodapé */}
+      <div className="fixed bottom-0 left-0 right-0 z-50 border-t border-white/5 bg-surface-900/95 backdrop-blur-sm">
+        <div className="flex items-center justify-end gap-3 px-4 md:px-8 py-3 max-w-screen-xl ml-auto">
+          {saveStatus === "ok" && (
+            <span className="flex items-center gap-1.5 text-xs text-status-running font-mono">
+              <CheckCircle2 className="w-3.5 h-3.5" /> Salvo com sucesso
+            </span>
+          )}
+          {saveStatus === "error" && (
+            <span className="flex items-center gap-1.5 text-xs text-status-error font-mono">
+              <XCircle className="w-3.5 h-3.5" /> Erro ao salvar
+            </span>
+          )}
+          <button
+            onClick={handleSave}
+            disabled={saving}
+            className="flex items-center gap-2 px-5 py-2.5 rounded-lg bg-accent text-white text-sm font-medium hover:bg-accent-light transition-all cursor-pointer disabled:opacity-50"
+          >
+            {saving ? <Loader2 className="w-4 h-4 animate-spin" /> : <Save className="w-4 h-4" />}
+            Salvar Configurações
+          </button>
+        </div>
       </div>
     </div>
   );
