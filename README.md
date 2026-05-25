@@ -10,15 +10,16 @@ Portal web para monitorar e operar robôs (processos) hospedados em um ou mais *
 
 ## Features principais
 
-- **Dashboard** com cards arrastáveis (ordem persistida no localStorage), favoritos, ações em lote (start/stop/kill), busca global e notificações acumuladas (jobs falhos, robôs ociosos, assistants offline, orchestrators desconectados).
-- **Detalhe do robô** com lista de jobs ativos (Running + fila), botões individuais por job, execuções do dia e logs expandíveis carregados sob demanda.
+- **Dashboard** com cards arrastáveis (ordem persistida no localStorage), favoritos, ações em lote (start/stop/kill), busca global, contador de robôs offline na sidebar e notificações acumuladas (jobs falhos, robôs ociosos, assistants offline, orchestrators desconectados, gatilhos auto-desabilitados).
+- **Detalhe do robô** lista todos os jobs ativos (Running + Pending) com botões individuais — pare o que está rodando sem precisar cancelar a fila. Execuções do dia e logs expandíveis carregados sob demanda.
 - **Histórico** completo de jobs com filtro por data, status e robô.
-- **Gatilhos**: listar, habilitar/desabilitar, criar, editar e excluir agendamentos do UiPath direto pelo portal.
-- **Auditoria** (admin): histórico de quem executou o que, quando, em qual robô.
+- **Gatilhos**: listar, habilitar/desabilitar, criar, editar e excluir. **Detecta automaticamente quando o UiPath desabilita um gatilho sozinho** (geralmente: fila estourada) e avisa via notificação clicável.
+- **Auditoria** (admin): histórico filtrável por usuário, ação, robô e intervalo de datas.
 - **Usuários** (admin): CRUD com soft delete — usuários são inativados, nunca removidos.
 - **Configurações**: cadastro de orchestrators por usuário (admin pode compartilhar), intervalo de polling e processos arquivados.
-- **Multi-orchestrator**: cada usuário gerencia o seu conjunto; requests em paralelo via `asyncio.gather`.
-- **Tema** claro/escuro, layout responsivo (mobile/desktop), sidebar colapsável.
+- **Multi-orchestrator**: cada usuário gerencia o seu conjunto; requests em paralelo via `asyncio.gather`. Detector de offline resiliente a falhas de rede (só reporta quando o orchestrator responde).
+- **Sessão JWT renovada automaticamente** a cada 12h — usuário fica conectado entre dias sem precisar relogar.
+- **Tema** claro/escuro, layout **totalmente responsivo** (todas as telas adaptadas pra mobile), sidebar colapsável.
 
 ## Quick start
 
@@ -60,7 +61,7 @@ Frontend em `http://localhost:5173`, backend em `http://localhost:3001`.
 | Variável | Onde | Descrição |
 |---|---|---|
 | `UIPATH_TOKEN_URL` | backend | URL OAuth2 do UiPath (default: `https://cloud.uipath.com/identity_/connect/token`) |
-| `JWT_SECRET` | backend | Secret para assinar tokens JWT. Gere com `python -c "import secrets; print(secrets.token_urlsafe(48))"` |
+| `JWT_SECRET` | backend | **Obrigatório, mínimo 32 caracteres.** Backend recusa o boot se vazio ou igual ao placeholder do `.env.example`. Gere com `python -c "import secrets; print(secrets.token_urlsafe(48))"` |
 | `DB_PASSWORD` | db + backend | Senha do Postgres |
 | `DATABASE_URL` | backend | URL de conexão Postgres (Docker monta automaticamente) |
 | `VITE_API_URL` | frontend (opcional) | URL do backend, só necessária se hospedado em domínio diferente |
