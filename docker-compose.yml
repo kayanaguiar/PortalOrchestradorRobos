@@ -40,6 +40,24 @@ services:
       retries: 3
       start_period: 20s
 
+  # Coletor de logs (ingere RobotLogs do UiPath no Postgres)
+  collector:
+    build:
+      context: ./server
+    restart: unless-stopped
+    command: python -u log_collector.py
+    environment:
+      DATABASE_URL: postgresql://robocommand:${DB_PASSWORD:-robocommand123}@db:5432/robocommand
+      UIPATH_TOKEN_URL: https://cloud.uipath.com/identity_/connect/token
+      PYTHONUNBUFFERED: "1"
+      LOG_COLLECTOR_INTERVAL: "120"
+      LOG_RETENTION_DAYS: "180"
+    depends_on:
+      db:
+        condition: service_healthy
+      backend:
+        condition: service_healthy  # garante que as migrações (entrypoint do backend) já rodaram
+
   # Frontend Nginx
   frontend:
     build:

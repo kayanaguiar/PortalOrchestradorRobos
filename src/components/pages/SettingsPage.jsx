@@ -1,4 +1,5 @@
 import { useState, useEffect, useMemo, useRef } from "react";
+import { createPortal } from "react-dom";
 import {
   Wifi,
   WifiOff,
@@ -13,9 +14,13 @@ import {
   Loader2,
   Eye,
   EyeOff,
+  HelpCircle,
+  X,
 } from "lucide-react";
 import { motion } from "motion/react";
 import { fetchOrchestrators, saveOrchestrators, testOrchestrator, saveSettings } from "../../services/api";
+
+const SCOPES_NECESSARIOS = "OR.Robots.Read OR.Jobs.Read OR.Jobs.Write OR.Folders.Read OR.Audit.Read OR.Execution.Read OR.Execution.Write OR.Monitoring.Read OR.Administration.Write";
 
 function formatTime(ts) {
   return new Date(ts).toLocaleTimeString("pt-BR", {
@@ -34,6 +39,7 @@ export default function SettingsPage({ pollingInterval, onPollingChange, searchT
   const [testingId, setTestingId] = useState(null);
   const [loadError, setLoadError] = useState(null);
   const [showSecrets, setShowSecrets] = useState({});
+  const [showHelp, setShowHelp] = useState(false);
 
   // Carrega orchestrators do backend com retry
   const [orchLoading, setOrchLoading] = useState(true);
@@ -176,13 +182,22 @@ export default function SettingsPage({ pollingInterval, onPollingChange, searchT
             {orchLoading ? "CARREGANDO..." : `${orchestrators.length} CONFIGURADOS`}
           </p>
         </div>
-        <button
-          onClick={addOrchestrator}
-          className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-accent/30 text-accent text-xs font-medium hover:bg-accent/10 transition-all cursor-pointer"
-        >
-          <Plus className="w-3.5 h-3.5" />
-          Adicionar
-        </button>
+        <div className="flex items-center gap-2">
+          <button
+            onClick={() => setShowHelp(true)}
+            className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-white/10 text-white/50 text-xs font-medium hover:bg-white/5 hover:text-white/80 transition-all cursor-pointer"
+          >
+            <HelpCircle className="w-3.5 h-3.5" />
+            Como conectar?
+          </button>
+          <button
+            onClick={addOrchestrator}
+            className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-accent/30 text-accent text-xs font-medium hover:bg-accent/10 transition-all cursor-pointer"
+          >
+            <Plus className="w-3.5 h-3.5" />
+            Adicionar
+          </button>
+        </div>
       </div>
 
       <div ref={orchListRef} className="space-y-4">
@@ -382,6 +397,104 @@ export default function SettingsPage({ pollingInterval, onPollingChange, searchT
           </button>
         </div>
       </div>
+
+      {showHelp && createPortal(
+        <div className="fixed inset-0 z-[9999] flex items-center justify-center p-4">
+          <div className="absolute inset-0 bg-black/60 backdrop-blur-sm" onClick={() => setShowHelp(false)} />
+          <div className="relative w-full max-w-2xl rounded-xl border border-white/10 bg-surface-800 shadow-2xl shadow-black/50 flex flex-col max-h-[90vh]">
+            {/* Header */}
+            <div className="flex items-center justify-between p-5 pb-0 shrink-0">
+              <div>
+                <h3 className="text-sm font-semibold text-white">Como conectar um Orchestrator</h3>
+                <p className="text-[11px] text-white/30 font-mono mt-0.5">CONFIGURAÇÃO NO UIPATH + CAMPOS DO PORTAL</p>
+              </div>
+              <button onClick={() => setShowHelp(false)} className="text-white/20 hover:text-white/50 cursor-pointer">
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            {/* Conteúdo */}
+            <div className="overflow-y-auto flex-1 p-5 space-y-5 text-sm text-white/70">
+              {/* Passo 1 */}
+              <div>
+                <h4 className="font-semibold text-white/90 mb-1.5">1. Criar a External Application no UiPath</h4>
+                <p className="text-white/50 text-[13px] leading-relaxed">
+                  No Automation Cloud: <span className="text-white/70">Admin → Aplicativos Externos → Adicionar Aplicativo</span>.
+                  Escolha o tipo <span className="font-mono text-accent">Confidential application</span> (aplicativo confidencial).
+                </p>
+              </div>
+
+              {/* Passo 2 */}
+              <div>
+                <h4 className="font-semibold text-white/90 mb-1.5">2. Adicionar os escopos (Application Scope)</h4>
+                <p className="text-white/50 text-[13px] leading-relaxed mb-2">
+                  Em <span className="text-white/70">Recursos / Escopos</span>, adicione o recurso <span className="font-mono text-accent">Orchestrator API Access</span> e
+                  marque os escopos abaixo. Importante: em <span className="text-white/70">Application Scope</span>, não User Scope.
+                </p>
+                <div className="rounded-lg bg-surface-900/60 border border-white/5 p-3">
+                  <div className="flex items-start justify-between gap-3">
+                    <code className="text-[11px] font-mono text-white/60 leading-relaxed break-all">{SCOPES_NECESSARIOS}</code>
+                    <button
+                      onClick={() => navigator.clipboard?.writeText(SCOPES_NECESSARIOS)}
+                      className="shrink-0 text-[10px] font-mono text-accent border border-accent/30 rounded px-2 py-1 hover:bg-accent/10 transition-all cursor-pointer"
+                    >
+                      Copiar
+                    </button>
+                  </div>
+                </div>
+              </div>
+
+              {/* Passo 3 */}
+              <div>
+                <h4 className="font-semibold text-white/90 mb-1.5">3. Pegar as credenciais</h4>
+                <p className="text-white/50 text-[13px] leading-relaxed">
+                  Depois de salvar o aplicativo, o UiPath mostra o <span className="text-white/70">App ID</span> e o <span className="text-white/70">App Secret</span>.
+                  O <span className="font-mono text-accent">App Secret aparece só uma vez</span> — copie e guarde na hora.
+                </p>
+              </div>
+
+              {/* Passo 4 - mapeamento dos campos */}
+              <div>
+                <h4 className="font-semibold text-white/90 mb-2">4. Preencher os campos do portal</h4>
+                <div className="space-y-2">
+                  {[
+                    { campo: "Nome", valor: "Livre — só pra você identificar (ex: \"Orchestrator Financeiro\")." },
+                    { campo: "URL Base (OData)", valor: "https://cloud.uipath.com/{org}/{tenant}/orchestrator_/odata — troque {org} e {tenant} pelos seus (visível na URL do Orchestrator)." },
+                    { campo: "Folder ID", valor: "ID da pasta (folder) que quer monitorar. Veja na URL ao abrir a pasta no Orchestrator, ou em Configurações da pasta." },
+                    { campo: "Client ID", valor: "O App ID da External Application (passo 3)." },
+                    { campo: "Client Secret", valor: "O App Secret da External Application (passo 3)." },
+                  ].map((item) => (
+                    <div key={item.campo} className="rounded-lg bg-surface-900/60 border border-white/5 p-3">
+                      <p className="text-[11px] font-mono uppercase tracking-wider text-accent mb-0.5">{item.campo}</p>
+                      <p className="text-[13px] text-white/50 leading-relaxed break-words">{item.valor}</p>
+                    </div>
+                  ))}
+                </div>
+              </div>
+
+              {/* Passo 5 */}
+              <div>
+                <h4 className="font-semibold text-white/90 mb-1.5">5. Testar antes de salvar</h4>
+                <p className="text-white/50 text-[13px] leading-relaxed">
+                  Use o botão <span className="text-white/70">Testar</span> no card do orchestrator pra validar a conexão.
+                  Se aparecer verde, clique em <span className="text-white/70">Salvar Configurações</span>.
+                </p>
+              </div>
+            </div>
+
+            {/* Footer */}
+            <div className="flex justify-end p-5 pt-0 shrink-0">
+              <button
+                onClick={() => setShowHelp(false)}
+                className="px-4 py-2 rounded-lg bg-accent text-white text-xs font-medium hover:bg-accent-light transition-all cursor-pointer"
+              >
+                Entendi
+              </button>
+            </div>
+          </div>
+        </div>,
+        document.body
+      )}
     </div>
   );
 }

@@ -1,4 +1,5 @@
-from sqlalchemy import Column, String, Text, DateTime, ForeignKey, Boolean
+from sqlalchemy import Column, String, Text, DateTime, ForeignKey, Boolean, Index
+from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.sql import func
 from database import Base
 
@@ -73,6 +74,27 @@ class AuditLog(Base):
     orchestrator_name = Column(String, nullable=True)
     detail = Column(Text, nullable=True)
     created_at = Column(DateTime, server_default=func.now())
+
+
+class RobotLog(Base):
+    """Logs do UiPath arquivados localmente (ingeridos pelo log_collector).
+    `id` é o Id do log no UiPath — garante idempotência na ingestão."""
+    __tablename__ = "robot_logs"
+
+    id = Column(String, primary_key=True)
+    orchestrator_id = Column(String, index=True)
+    process_name = Column(String, index=True)
+    robot_name = Column(String)
+    job_key = Column(String, index=True)
+    level = Column(String)
+    message = Column(Text)
+    timestamp = Column(DateTime, index=True)
+    raw = Column(JSONB)
+    created_at = Column(DateTime, server_default=func.now())
+
+    __table_args__ = (
+        Index("ix_robot_logs_process_timestamp", "process_name", "timestamp"),
+    )
 
 
 class User(Base):

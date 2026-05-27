@@ -1,4 +1,6 @@
 import os
+import re
+from datetime import datetime, timezone
 from dotenv import load_dotenv
 
 load_dotenv(os.path.join(os.path.dirname(__file__), "..", ".env"))
@@ -17,7 +19,7 @@ from orchestrator_store import load_orchestrators, save_orchestrators, get_share
 from cache import get_cached, set_cached, clear_cache
 from auth import verify_password, create_token, get_current_user, hash_password, generate_user_id, create_default_admin, require_admin, require_operator, require_viewer
 from database import SessionLocal
-from models import ArchivedProcess, Setting
+from models import ArchivedProcess, Setting, RobotLog
 
 limiter = Limiter(key_func=get_remote_address)
 app = FastAPI(title="RoboCommand API")
@@ -266,6 +268,72 @@ async def health(_user: dict = Depends(require_viewer)):
 
 # ─── Logs ─────────────────────────────────────────────────
 
+def _parse_log_filter(filter_str: str | None):
+    """Extrai process_name e range de datas de um $filter OData simples
+    (formato que o frontend monta)."""
+    process_name = date_from = date_to = None
+    if not filter_str:
+        return process_name, date_from, date_to
+    m = re.search(r"ProcessName eq '([^']*)'", filter_str)
+    if m:
+        process_name = m.group(1)
+    m = re.search(r"TimeStamp ge ([0-9T:\-.Z]+)", filter_str)
+    if m:
+        date_from = m.group(1)
+    m = re.search(r"TimeStamp le ([0-9T:\-.Z]+)", filter_str)
+    if m:
+        date_to = m.group(1)
+    return process_name, date_from, date_to
+
+
+def _parse_iso(s: str | None):
+    """ISO (com Z) → datetime naive UTC, pra comparar com a coluna do banco."""
+    if not s:
+        return None
+    try:
+        return datetime.fromisoformat(s.replace("Z", "+00:00")).astimezone(timezone.utc).replace(tzinfo=None)
+    except ValueError:
+        return None
+
+
+def _is_historical(date_to: str | None) -> bool:
+    """True se a busca termina antes do início de hoje (UTC) — vai pro Postgres.
+    Sem limite superior (ou incluindo hoje) → busca ao vivo no UiPath."""
+    dt = _parse_iso(date_to)
+    if dt is None:
+        return False
+    today_start = datetime.now(timezone.utc).replace(hour=0, minute=0, second=0, microsecond=0, tzinfo=None)
+    return dt < today_start
+
+
+def _query_logs_from_db(process_name, date_from, date_to, orchestrator_id, top, skip, orderby):
+    """Lê logs arquivados do Postgres no mesmo formato que o UiPath devolveria."""
+    db = SessionLocal()
+    try:
+        q = db.query(RobotLog)
+        if process_name:
+            q = q.filter(RobotLog.process_name == process_name)
+        if orchestrator_id:
+            q = q.filter(RobotLog.orchestrator_id == orchestrator_id)
+        df, dt = _parse_iso(date_from), _parse_iso(date_to)
+        if df:
+            q = q.filter(RobotLog.timestamp >= df)
+        if dt:
+            q = q.filter(RobotLog.timestamp <= dt)
+        total = q.count()
+        descending = "desc" in (orderby or "").lower()
+        q = q.order_by(RobotLog.timestamp.desc() if descending else RobotLog.timestamp.asc())
+        rows = q.offset(skip).limit(top).all()
+        # `raw` preserva o log original do UiPath — formato idêntico pro frontend
+        value = [r.raw or {
+            "Id": r.id, "Level": r.level, "Message": r.message,
+            "ProcessName": r.process_name, "RobotName": r.robot_name, "JobKey": r.job_key,
+        } for r in rows]
+        return {"value": value, "@odata.count": total}
+    finally:
+        db.close()
+
+
 @app.get("/api/logs")
 async def get_logs(
     top: int = Query(50, alias="$top"),
@@ -275,12 +343,24 @@ async def get_logs(
     orchestrator_id: str | None = Query(None),
     _user: dict = Depends(require_viewer),
 ):
-    """Busca logs de todos os orchestrators (ou de um específico)."""
+    """Busca logs. Histórico (dias anteriores) vem do Postgres; hoje vem ao vivo do UiPath."""
     cache_key = f"logs:{top}:{skip}:{filter}:{orderby}:{orchestrator_id}"
     cached = get_cached(cache_key, ttl=5)
     if cached:
         return cached
 
+    process_name, date_from, date_to = _parse_log_filter(filter)
+
+    # Busca em dias anteriores → lê do banco local (rápido, sem depender do UiPath).
+    # Se o banco ainda não tem esses logs (coletor começou depois), cai pro UiPath ao vivo.
+    if _is_historical(date_to):
+        result = _query_logs_from_db(process_name, date_from, date_to, orchestrator_id, top, skip, orderby)
+        if result["@odata.count"] > 0:
+            set_cached(cache_key, result)
+            return result
+        # vazio no banco → segue pro caminho ao vivo abaixo (fallback)
+
+    # Busca de hoje / ao vivo → UiPath
     params = {
         "$top": top,
         "$skip": skip,

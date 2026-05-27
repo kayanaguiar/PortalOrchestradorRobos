@@ -3,7 +3,7 @@
 ## Stack
 - **Frontend**: React 19 + Tailwind CSS 4 + Vite 8 + React Router + Motion + @dnd-kit
 - **Backend**: Python FastAPI + httpx + uvicorn
-- **Docker**: Nginx (frontend) + FastAPI (backend) + PostgreSQL (preparado)
+- **Docker**: Nginx (frontend) + FastAPI (backend) + PostgreSQL + **collector** (worker de logs)
 - **Linguagem**: JavaScript (JSX) no frontend, Python no backend
 
 ## Como rodar
@@ -43,7 +43,8 @@ server/
   uipath_auth.py      # Gerenciamento de tokens OAuth2
   cache.py            # Cache em memória com TTL
   orchestrator_store.py # CRUD de orchestrators (DB via SQLAlchemy)
-  models.py           # User, Orchestrator, SharedOrchestrator, Setting, ArchivedProcess, AuditLog
+  log_collector.py    # Worker que arquiva RobotLogs do UiPath no Postgres (container separado)
+  models.py           # User, Orchestrator, SharedOrchestrator, Setting, ArchivedProcess, AuditLog, RobotLog
   data/               # orchestrators.json, settings.json (legado, hoje usa Postgres)
   alembic/            # Migrações do banco
 ```
@@ -72,6 +73,16 @@ server/
 - **Refresh de token**: `POST /api/auth/refresh` emite novo JWT a partir de um válido (usado pelo frontend a cada 12h)
 - **Snapshots in-memory** (`_previous_online_assistants`, `_previous_enabled_triggers`, `_manually_disabled_triggers`): cuidado com `--workers > 1` no uvicorn, cada worker tem seu snapshot
 
+### Arquivamento de logs (resolve "buscar logs antigos não carrega")
+- **Problema**: `/api/logs` consultava `/odata/RobotLogs` ao vivo; logs antigos batiam no timeout de 30s
+- **`log_collector.py`** roda em **container separado** (`collector` no compose): a cada `LOG_COLLECTOR_INTERVAL` (120s) busca os logs novos de cada orchestrator e grava na tabela `robot_logs`
+- **Marca d'água por orchestrator** em `settings` (`log_watermark:{orchestrator_id}`) = timestamp do último log coletado. Persiste no Postgres → após pausa/restart, retoma de onde parou (recupera o gap, desde que o UiPath ainda retenha)
+- **Começa do zero**: no primeiro boot de cada orchestrator a marca é fixada em "agora" — não importa histórico antigo
+- **Idempotência**: insere com `ON CONFLICT (id) DO NOTHING` usando o `Id` do log do UiPath como PK
+- **Retenção**: 1x/dia apaga logs com mais de `LOG_RETENTION_DAYS` (180)
+- **Leitura híbrida em `/api/logs`**: busca de **hoje** → ao vivo no UiPath (sem defasagem); busca de **dias anteriores** → Postgres (instantâneo), com **fallback** pro UiPath se o banco ainda não tiver aqueles logs. `_parse_log_filter` extrai process_name/datas do `$filter`; `_is_historical` decide a fonte. Frontend não muda
+- O **collector espera `backend` ficar healthy** (depends_on) pra garantir que a migração já criou a tabela
+
 ### Frontend
 - NÃO usar dados mock/fallback — apenas dados reais da API
 - Loading progressivo: só espera health + jobs + logs. Resto carrega em background
@@ -89,6 +100,7 @@ server/
 - **Todas as telas adaptadas pra mobile**: grids viram stack vertical, tabelas viram cards, botões empilham, painel de notificações ocupa quase toda a tela
 - **Status `inactive` = "Offline"** com cor `status-offline` (roxo) e ícone `WifiOff` — distinto de "Parado"
 - Detalhe do robô lista **todos os jobs ativos** (Running + Pending) com botões individuais; `buildRobots` prioriza Running > Pending na seleção do job principal
+- **Guia "Como conectar?"** na `/settings`: botão abre modal com passo a passo da External Application do UiPath + mapeamento dos 5 campos (Nome, URL Base OData, Folder ID, Client ID, Client Secret) + botão pra copiar os scopes
 
 ### UiPath API
 - IsLatestVersion do /odata/Releases é BUGADO — comparar com GetProcessVersions
@@ -107,7 +119,8 @@ OR.Robots.Read OR.Jobs.Read OR.Jobs.Write OR.Folders.Read
 OR.Audit.Read OR.Execution.Read OR.Execution.Write
 OR.Monitoring.Read OR.Administration.Write
 ```
-Tipo: Confidential, scopes em Application Scope (não User Scope)
+Tipo: Confidential, scopes em Application Scope (não User Scope).
+O mesmo passo a passo está disponível no portal: `/settings` → botão **"Como conectar?"**.
 
 ## Variáveis de ambiente
 - `UIPATH_TOKEN_URL` — URL de autenticação (default: cloud.uipath.com)
@@ -115,3 +128,5 @@ Tipo: Confidential, scopes em Application Scope (não User Scope)
 - `DB_PASSWORD` — senha do Postgres
 - `DATABASE_URL` — PostgreSQL (para Docker)
 - `VITE_API_URL` — URL do backend se hospedado separado
+- `LOG_COLLECTOR_INTERVAL` — intervalo do coletor de logs em segundos (default: 120)
+- `LOG_RETENTION_DAYS` — dias de retenção dos logs arquivados (default: 180)

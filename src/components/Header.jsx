@@ -1,4 +1,4 @@
-import { useState, useRef, useEffect, useMemo } from "react";
+import { useState, useRef, useEffect, useMemo, useCallback } from "react";
 import { createPortal } from "react-dom";
 import { Search, Bell, RefreshCw, Loader2, XCircle, AlertTriangle, X, LogOut, Lock, ChevronDown, Sun, Moon, Menu } from "lucide-react";
 import { motion } from "motion/react";
@@ -38,17 +38,28 @@ export default function Header({ title, subtitle, loading, onRefresh, searchTerm
 
   const count = notifications.length;
 
+  const updateNotifPos = useCallback(() => {
+    if (!bellRef.current) return;
+    const rect = bellRef.current.getBoundingClientRect();
+    // Em mobile (< 640px) o painel ocupa quase toda a tela com 8px de margem.
+    const mobile = window.innerWidth < 640;
+    setPanelPos({
+      top: rect.bottom + 8,
+      right: mobile ? 8 : Math.max(8, window.innerWidth - rect.right),
+    });
+  }, []);
+
+  // Reposiciona ao abrir e acompanha o sino em scroll/resize (true = captura scroll de containers internos)
   useEffect(() => {
-    if (showNotifications && bellRef.current) {
-      const rect = bellRef.current.getBoundingClientRect();
-      // Em mobile (< 640px) o painel ocupa quase toda a tela com 8px de margem.
-      const mobile = window.innerWidth < 640;
-      setPanelPos({
-        top: rect.bottom + 8,
-        right: mobile ? 8 : Math.max(8, window.innerWidth - rect.right),
-      });
-    }
-  }, [showNotifications]);
+    if (!showNotifications) return;
+    updateNotifPos();
+    window.addEventListener("scroll", updateNotifPos, true);
+    window.addEventListener("resize", updateNotifPos);
+    return () => {
+      window.removeEventListener("scroll", updateNotifPos, true);
+      window.removeEventListener("resize", updateNotifPos);
+    };
+  }, [showNotifications, updateNotifPos]);
 
   useEffect(() => {
     if (!showNotifications) return;
