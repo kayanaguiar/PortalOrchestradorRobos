@@ -3,10 +3,11 @@ import { Routes, Route, useNavigate, useLocation } from "react-router-dom";
 import Sidebar from "./components/Sidebar";
 import Header from "./components/Header";
 import StatsPanel from "./components/StatsPanel";
+import ResourceCards from "./components/ResourceCards";
 import SortableRobotCard from "./components/SortableRobotCard";
 import ActivityTable from "./components/ActivityTable";
 import ChangePasswordModal from "./components/ChangePasswordModal";
-import { useUiPathLogs, useUiPathJobs, useUiPathProcesses, useUiPathSessions, useUiPathHealth, useUiPathTriggers } from "./hooks/useUiPathData";
+import { useUiPathLogs, useUiPathJobs, useUiPathProcesses, useUiPathSessions, useUiPathHealth, useUiPathTriggers, useUiPathQueuesSummary } from "./hooks/useUiPathData";
 import useMediaQuery from "./hooks/useMediaQuery";
 import ConfirmModal from "./components/ConfirmModal";
 import Toast from "./components/Toast";
@@ -20,6 +21,9 @@ const RobotsPage = lazy(() => import("./components/pages/RobotsPage"));
 const LogsPage = lazy(() => import("./components/pages/LogsPage"));
 const SettingsPage = lazy(() => import("./components/pages/SettingsPage"));
 const TriggersPage = lazy(() => import("./components/pages/TriggersPage"));
+const QueuesPage = lazy(() => import("./components/pages/QueuesPage"));
+const BucketsPage = lazy(() => import("./components/pages/BucketsPage"));
+const AssetsPage = lazy(() => import("./components/pages/AssetsPage"));
 const UsersPage = lazy(() => import("./components/pages/UsersPage"));
 const AuditPage = lazy(() => import("./components/pages/AuditPage"));
 
@@ -28,6 +32,9 @@ const pageConfig = {
   "/robots": { id: "robots", title: "Robôs", subtitle: "GERENCIAMENTO E DETALHES" },
   "/history": { id: "logs", title: "Histórico de Jobs", subtitle: "EXECUÇÕES DE TODOS OS ROBÔS" },
   "/triggers": { id: "triggers", title: "Gatilhos", subtitle: "AGENDAMENTOS E TRIGGERS" },
+  "/queues": { id: "queues", title: "Filas", subtitle: "QUEUES E TRANSAÇÕES" },
+  "/buckets": { id: "buckets", title: "Buckets", subtitle: "STORAGE E ARQUIVOS" },
+  "/assets": { id: "assets", title: "Assets", subtitle: "VARIÁVEIS E CREDENCIAIS" },
   "/audit": { id: "audit", title: "Auditoria", subtitle: "HISTÓRICO DE AÇÕES" },
   "/users": { id: "users", title: "Usuários", subtitle: "GERENCIAMENTO DE ACESSOS" },
   "/settings": { id: "settings", title: "Configurações", subtitle: "ORCHESTRATORS E CONEXÕES" },
@@ -254,7 +261,22 @@ function AuthenticatedApp({ user, onLogout }) {
   }, []);
   const [logPageSize, setLogPageSize] = useState(5);
   const [searchTerm, setSearchTerm] = useState("");
-  const [dismissedNotifications, setDismissedNotifications] = useState(new Set());
+  const [dismissedNotifications, setDismissedNotifications] = useState(() => {
+    // Persiste as notificações dispensadas entre F5 (senão reapareciam a cada reload).
+    try {
+      const arr = JSON.parse(localStorage.getItem("dismissedNotifications") || "[]");
+      const today = new Date().toISOString().slice(0, 10);
+      // Descarta dispensas diárias (id terminando em -AAAA-MM-DD) de dias anteriores,
+      // pra que um alerta de hoje dispensado não esconda os de amanhã.
+      const kept = arr.filter((id) => {
+        const m = id.match(/-(\d{4}-\d{2}-\d{2})$/);
+        return !m || m[1] === today;
+      });
+      return new Set(kept);
+    } catch {
+      return new Set();
+    }
+  });
   const [accumulatedNotifications, setAccumulatedNotifications] = useState([]);
   const [archivedProcesses, setArchivedProcesses] = useState(new Set());
 
@@ -317,11 +339,12 @@ function AuthenticatedApp({ user, onLogout }) {
 
   const { logs: apiLogs, loading: logsLoading, error: logsError, refresh: refreshLogs, lastUpdated: logsLastUpdated } = useUiPathLogs({ top: 50, interval: intervalMs });
   const todayFilter = `CreationTime ge ${new Date().toISOString().split("T")[0]}T00:00:00Z`;
-  const { jobs: apiJobs, loading: jobsLoading, refresh: refreshJobs, lastUpdated: jobsLastUpdated } = useUiPathJobs({ top: 200, filter: todayFilter, interval: intervalMs });
+  const { jobs: apiJobs, loading: jobsLoading, refresh: refreshJobs, lastUpdated: jobsLastUpdated } = useUiPathJobs({ top: 1000, filter: todayFilter, interval: intervalMs });
   const { processes: apiReleases, loading: processesLoading, refresh: refreshProcesses } = useUiPathProcesses(intervalMs);
   const { sessions: apiSessions, recentlyOffline, loading: sessionsLoading, refresh: refreshSessions } = useUiPathSessions(intervalMs);
   const { autoDisabled: triggersAutoDisabled } = useUiPathTriggers(2 * 60 * 1000);
   const { connected, orchestratorStatuses, loading: healthLoading, refresh: refreshHealth } = useUiPathHealth();
+  const { totals: queueTotals, queues: queueSummary, loading: queuesSummaryLoading, refresh: refreshQueuesSummary } = useUiPathQueuesSummary();
 
   // Updates de versão em background (roda só uma vez quando conecta)
   const [processUpdates, setProcessUpdates] = useState({});
@@ -606,7 +629,7 @@ function AuthenticatedApp({ user, onLogout }) {
   const refreshAll = useCallback(async () => {
     setRefreshing(true);
     try {
-      await Promise.all([refreshLogs(), refreshJobs(), refreshProcesses(), refreshSessions(), refreshHealth()]);
+      await Promise.all([refreshLogs(), refreshJobs(), refreshProcesses(), refreshSessions(), refreshHealth(), refreshQueuesSummary()]);
       refreshProcessUpdates();
       addToast("success", "Dados atualizados");
     } catch {
@@ -614,7 +637,7 @@ function AuthenticatedApp({ user, onLogout }) {
     } finally {
       setRefreshing(false);
     }
-  }, [refreshLogs, refreshJobs, refreshProcesses, refreshSessions, refreshHealth, refreshProcessUpdates, addToast]);
+  }, [refreshLogs, refreshJobs, refreshProcesses, refreshSessions, refreshHealth, refreshQueuesSummary, refreshProcessUpdates, addToast]);
 
   const now = new Date();
   const dateStr = now.toLocaleDateString("pt-BR", {
@@ -629,6 +652,7 @@ function AuthenticatedApp({ user, onLogout }) {
     setAccumulatedNotifications((prev) => {
       const existingIds = new Set(prev.map((n) => n.id));
       const newItems = [];
+      const today = new Date().toISOString().slice(0, 10);  // sufixo dos alertas diários (idle/fila)
 
       // Jobs com erro hoje
       for (const job of apiJobs) {
@@ -650,13 +674,15 @@ function AuthenticatedApp({ user, onLogout }) {
         }
       }
 
-      // Robôs que não executaram hoje (após 10h)
+      // Robôs que não executaram hoje (após 10h).
+      // Só avalia com os jobs JÁ carregados — senão, no F5, executionsToday ainda é 0
+      // pra todos (jobs não chegaram) e dispararia falso alarme.
       const currentHour = new Date().getHours();
-      if (currentHour >= 10 && robots.length > 0) {
+      if (!jobsLoading && currentHour >= 10 && robots.length > 0) {
         for (const robot of robots) {
           if (archivedProcesses.has(robot.processKey)) continue;
           if (robot.executionsToday === 0 && robot.status !== "running" && robot.status !== "pending") {
-            const id = `idle-${robot.processKey}`;
+            const id = `idle-${robot.processKey}-${today}`;
             if (!existingIds.has(id)) {
               newItems.push({
                 id,
@@ -701,6 +727,23 @@ function AuthenticatedApp({ user, onLogout }) {
         }
       }
 
+      // Filas com falhas HOJE — notifica quando aparece falha; some quando zera (ou vira o dia)
+      for (const q of queueSummary) {
+        const failed = q.counts?.failedToday || 0;
+        if (failed <= 0) continue;
+        const id = `queue-failed-${q.orchestratorId}-${q.id}-${today}`;
+        if (!existingIds.has(id)) {
+          newItems.push({
+            id,
+            type: "warning",
+            title: `Fila com falhas hoje: ${q.name}`,
+            detail: `${q.orchestratorName} — ${failed} transação${failed > 1 ? "ões" : ""} com falha hoje`,
+            timestamp: new Date().toISOString(),
+            link: "/queues",
+          });
+        }
+      }
+
       // Orchestrators desconectados — só notifica após 2 falhas consecutivas
       // pra ignorar timeout pontual do UiPath. Reseta o contador ao reconectar.
       const orchIds = new Set();
@@ -729,6 +772,22 @@ function AuthenticatedApp({ user, onLogout }) {
       // Remove notificações de orchestrators que reconectaram
       let filtered = prev.filter((n) => !n.id.startsWith("orch-") || orchIds.has(n.id));
 
+      // Auto-cura: remove alertas idle de robôs que já rodaram hoje ou estão rodando/pendentes
+      // (evita que um alerta criado num estado transitório fique preso na lista).
+      const stillIdleIds = new Set(
+        robots
+          .filter((r) => !archivedProcesses.has(r.processKey)
+            && r.executionsToday === 0 && r.status !== "running" && r.status !== "pending")
+          .map((r) => `idle-${r.processKey}-${today}`)
+      );
+      filtered = filtered.filter((n) => !n.id.startsWith("idle-") || stillIdleIds.has(n.id));
+
+      // Remove alertas de fila que resolveram (Failed voltou a 0)
+      const failedQueueIds = new Set(
+        queueSummary.filter((q) => (q.counts?.failedToday || 0) > 0).map((q) => `queue-failed-${q.orchestratorId}-${q.id}-${today}`)
+      );
+      filtered = filtered.filter((n) => !n.id.startsWith("queue-failed-") || failedQueueIds.has(n.id));
+
       // Enriquece notificações de jobs que ainda não têm robotId
       let enriched = false;
       if (robots.length > 0) {
@@ -751,7 +810,7 @@ function AuthenticatedApp({ user, onLogout }) {
       merged.sort((a, b) => new Date(b.timestamp) - new Date(a.timestamp));
       return merged;
     });
-  }, [apiJobs, recentlyOffline, orchestratorStatuses, robots, triggersAutoDisabled]);
+  }, [apiJobs, recentlyOffline, orchestratorStatuses, robots, triggersAutoDisabled, queueSummary, jobsLoading]);
 
   const notifications = useMemo(
     () => accumulatedNotifications.filter((n) => !dismissedNotifications.has(n.id)),
@@ -765,6 +824,13 @@ function AuthenticatedApp({ user, onLogout }) {
   const clearAllNotifications = useCallback(() => {
     setDismissedNotifications(new Set(accumulatedNotifications.map((n) => n.id)));
   }, [accumulatedNotifications]);
+
+  // Persiste as dispensas no localStorage (sobrevive ao F5)
+  useEffect(() => {
+    try {
+      localStorage.setItem("dismissedNotifications", JSON.stringify([...dismissedNotifications]));
+    } catch { /* ignore */ }
+  }, [dismissedNotifications]);
 
   const handleNotificationClick = useCallback((notif) => {
     if (notif.robotId) {
@@ -836,7 +902,7 @@ function AuthenticatedApp({ user, onLogout }) {
   return (
     <div className="min-h-screen hud-grid scanline">
       <Sidebar activePage={activePage} onNavigate={(id) => {
-        const routes = { dashboard: "/", robots: "/robots", logs: "/history", triggers: "/triggers", audit: "/audit", users: "/users", settings: "/settings" };
+        const routes = { dashboard: "/", robots: "/robots", logs: "/history", triggers: "/triggers", queues: "/queues", buckets: "/buckets", assets: "/assets", audit: "/audit", users: "/users", settings: "/settings" };
         navigate(routes[id] || "/");
         if (isMobile) setMobileMenuOpen(false);
       }} collapsed={isMobile ? false : sidebarCollapsed} onToggle={toggleSidebar} userRole={user.role}
@@ -877,6 +943,7 @@ function AuthenticatedApp({ user, onLogout }) {
           <Route path="/" element={
             <div className="space-y-6">
               <StatsPanel robots={visibleRobots} jobs={apiJobs} sessions={apiSessions} />
+              <ResourceCards queueTotals={queueTotals} queuesLoading={queuesSummaryLoading} />
               <div>
                 <div className="flex items-center justify-between mb-4">
                   <h2 className="text-sm font-semibold text-white">Visão dos Robôs</h2>
@@ -969,6 +1036,15 @@ function AuthenticatedApp({ user, onLogout }) {
           } />
           <Route path="/triggers" element={
             <TriggersPage addToast={addToast} userRole={user.role} />
+          } />
+          <Route path="/queues" element={
+            <QueuesPage addToast={addToast} userRole={user.role} />
+          } />
+          <Route path="/buckets" element={
+            <BucketsPage addToast={addToast} userRole={user.role} />
+          } />
+          <Route path="/assets" element={
+            <AssetsPage addToast={addToast} userRole={user.role} />
           } />
           {user.role === "admin" && (
             <Route path="/audit" element={

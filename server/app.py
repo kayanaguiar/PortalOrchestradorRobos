@@ -1,12 +1,12 @@
 import os
 import re
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 from dotenv import load_dotenv
 
 load_dotenv(os.path.join(os.path.dirname(__file__), "..", ".env"))
 
-from fastapi import FastAPI, Query, HTTPException, Request, Depends
-from fastapi.responses import JSONResponse
+from fastapi import FastAPI, Query, HTTPException, Request, Depends, UploadFile, File, Form
+from fastapi.responses import JSONResponse, Response
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 import httpx
@@ -42,8 +42,14 @@ app.add_middleware(
 )
 
 
-async def uipath_get(orch: dict, endpoint: str, params: dict | None = None) -> dict:
-    """Faz uma requisição GET autenticada a um orchestrator."""
+def _folder_header(orch: dict, folder_id: str | None) -> str:
+    """Folder a usar no header X-UIPATH-OrganizationUnitId: o override, se vier,
+    senão o folder configurado no orchestrator."""
+    return str(folder_id) if folder_id is not None else orch["folderId"]
+
+
+async def uipath_get(orch: dict, endpoint: str, params: dict | None = None, folder_id: str | None = None) -> dict:
+    """Faz uma requisição GET autenticada a um orchestrator (folder opcional)."""
     token = await get_token(orch["id"], orch["clientId"], orch["clientSecret"])
     async with httpx.AsyncClient(timeout=30.0) as client:
         response = await client.get(
@@ -51,7 +57,7 @@ async def uipath_get(orch: dict, endpoint: str, params: dict | None = None) -> d
             params=params,
             headers={
                 "Authorization": f"Bearer {token}",
-                "X-UIPATH-OrganizationUnitId": orch["folderId"],
+                "X-UIPATH-OrganizationUnitId": _folder_header(orch, folder_id),
             },
         )
         if response.status_code != 200:
@@ -59,8 +65,8 @@ async def uipath_get(orch: dict, endpoint: str, params: dict | None = None) -> d
         return response.json()
 
 
-async def uipath_post(orch: dict, endpoint: str, body: dict | None = None) -> dict:
-    """Faz uma requisição POST autenticada a um orchestrator."""
+async def uipath_post(orch: dict, endpoint: str, body: dict | None = None, folder_id: str | None = None) -> dict:
+    """Faz uma requisição POST autenticada a um orchestrator (folder opcional)."""
     token = await get_token(orch["id"], orch["clientId"], orch["clientSecret"])
     async with httpx.AsyncClient(timeout=30.0) as client:
         response = await client.post(
@@ -68,7 +74,7 @@ async def uipath_post(orch: dict, endpoint: str, body: dict | None = None) -> di
             json=body,
             headers={
                 "Authorization": f"Bearer {token}",
-                "X-UIPATH-OrganizationUnitId": orch["folderId"],
+                "X-UIPATH-OrganizationUnitId": _folder_header(orch, folder_id),
                 "Content-Type": "application/json",
             },
         )
@@ -79,8 +85,8 @@ async def uipath_post(orch: dict, endpoint: str, body: dict | None = None) -> di
         return response.json()
 
 
-async def uipath_put(orch: dict, endpoint: str, body: dict | None = None) -> dict:
-    """Faz uma requisição PUT autenticada a um orchestrator."""
+async def uipath_put(orch: dict, endpoint: str, body: dict | None = None, folder_id: str | None = None) -> dict:
+    """Faz uma requisição PUT autenticada a um orchestrator (folder opcional)."""
     token = await get_token(orch["id"], orch["clientId"], orch["clientSecret"])
     async with httpx.AsyncClient(timeout=30.0) as client:
         response = await client.put(
@@ -88,7 +94,7 @@ async def uipath_put(orch: dict, endpoint: str, body: dict | None = None) -> dic
             json=body,
             headers={
                 "Authorization": f"Bearer {token}",
-                "X-UIPATH-OrganizationUnitId": orch["folderId"],
+                "X-UIPATH-OrganizationUnitId": _folder_header(orch, folder_id),
                 "Content-Type": "application/json",
             },
         )
@@ -99,8 +105,8 @@ async def uipath_put(orch: dict, endpoint: str, body: dict | None = None) -> dic
         return response.json()
 
 
-async def uipath_patch(orch: dict, endpoint: str, body: dict | None = None) -> dict:
-    """Faz uma requisição PATCH autenticada a um orchestrator."""
+async def uipath_patch(orch: dict, endpoint: str, body: dict | None = None, folder_id: str | None = None) -> dict:
+    """Faz uma requisição PATCH autenticada a um orchestrator (folder opcional)."""
     token = await get_token(orch["id"], orch["clientId"], orch["clientSecret"])
     async with httpx.AsyncClient(timeout=30.0) as client:
         response = await client.patch(
@@ -108,7 +114,7 @@ async def uipath_patch(orch: dict, endpoint: str, body: dict | None = None) -> d
             json=body,
             headers={
                 "Authorization": f"Bearer {token}",
-                "X-UIPATH-OrganizationUnitId": orch["folderId"],
+                "X-UIPATH-OrganizationUnitId": _folder_header(orch, folder_id),
                 "Content-Type": "application/json",
             },
         )
@@ -119,15 +125,16 @@ async def uipath_patch(orch: dict, endpoint: str, body: dict | None = None) -> d
         return response.json()
 
 
-async def uipath_delete(orch: dict, endpoint: str) -> dict:
-    """Faz uma requisição DELETE autenticada a um orchestrator."""
+async def uipath_delete(orch: dict, endpoint: str, folder_id: str | None = None, params: dict | None = None) -> dict:
+    """Faz uma requisição DELETE autenticada a um orchestrator (folder/params opcionais)."""
     token = await get_token(orch["id"], orch["clientId"], orch["clientSecret"])
     async with httpx.AsyncClient(timeout=30.0) as client:
         response = await client.delete(
             f"{orch['baseUrl']}/{endpoint}",
+            params=params,
             headers={
                 "Authorization": f"Bearer {token}",
-                "X-UIPATH-OrganizationUnitId": orch["folderId"],
+                "X-UIPATH-OrganizationUnitId": _folder_header(orch, folder_id),
             },
         )
         if response.status_code not in (200, 204):
@@ -306,6 +313,18 @@ def _is_historical(date_to: str | None) -> bool:
     return dt < today_start
 
 
+def _job_finished_and_collected(job_ended_at: str | None) -> bool:
+    """True quando o job terminou há tempo suficiente pro coletor já ter arquivado os
+    logs (2 ciclos do coletor). Logs de job finalizado são imutáveis → podem vir do
+    banco mesmo sendo de hoje. Job ainda produzindo (sem fim) ou recém-terminado → ao vivo."""
+    ended = _parse_iso(job_ended_at)
+    if ended is None:
+        return False
+    interval = int(os.environ.get("LOG_COLLECTOR_INTERVAL", "120") or "120")
+    threshold = datetime.now(timezone.utc).replace(tzinfo=None) - timedelta(seconds=2 * interval)
+    return ended < threshold
+
+
 def _query_logs_from_db(process_name, date_from, date_to, orchestrator_id, top, skip, orderby):
     """Lê logs arquivados do Postgres no mesmo formato que o UiPath devolveria."""
     db = SessionLocal()
@@ -341,19 +360,24 @@ async def get_logs(
     filter: str | None = Query(None, alias="$filter"),
     orderby: str = Query("TimeStamp desc", alias="$orderby"),
     orchestrator_id: str | None = Query(None),
+    job_ended_at: str | None = Query(None),
     _user: dict = Depends(require_viewer),
 ):
-    """Busca logs. Histórico (dias anteriores) vem do Postgres; hoje vem ao vivo do UiPath."""
-    cache_key = f"logs:{top}:{skip}:{filter}:{orderby}:{orchestrator_id}"
+    """Busca logs. Fonte decidida por ESTADO, não só por data:
+    - dias anteriores → Postgres;
+    - job já finalizado há alguns minutos (logs imutáveis, `job_ended_at`) → Postgres, mesmo hoje;
+    - job rodando / recém-terminado / hoje ao vivo → UiPath.
+    Sempre com fallback ao vivo se o banco ainda não tiver os logs (coletor atrasado)."""
+    cache_key = f"logs:{top}:{skip}:{filter}:{orderby}:{orchestrator_id}:{job_ended_at}"
     cached = get_cached(cache_key, ttl=5)
     if cached:
         return cached
 
     process_name, date_from, date_to = _parse_log_filter(filter)
 
-    # Busca em dias anteriores → lê do banco local (rápido, sem depender do UiPath).
-    # Se o banco ainda não tem esses logs (coletor começou depois), cai pro UiPath ao vivo.
-    if _is_historical(date_to):
+    # Banco quando: é de dia anterior OU o job já terminou há tempo do coletor arquivar.
+    # Se o banco ainda não tem (coletor começou depois / atrasado), cai pro UiPath ao vivo.
+    if _is_historical(date_to) or _job_finished_and_collected(job_ended_at):
         result = _query_logs_from_db(process_name, date_from, date_to, orchestrator_id, top, skip, orderby)
         if result["@odata.count"] > 0:
             set_cached(cache_key, result)
@@ -962,6 +986,706 @@ async def delete_trigger(req: DeleteTriggerRequest, _user: dict = Depends(requir
     orch = _find_orchestrator(req.orchestratorId, user=_user)
     result = await uipath_delete(orch, f"ProcessSchedules({req.triggerId})")
     clear_cache()
+    return result
+
+
+# ─── Folders ──────────────────────────────────────────────
+
+async def _list_folders(orch: dict) -> list[dict]:
+    """Lista os folders acessíveis por um orchestrator. Silencioso em erro."""
+    try:
+        data = await uipath_get(orch, "Folders", {"$top": 500})
+        return data.get("value", [])
+    except Exception:
+        return []
+
+
+@app.get("/api/folders")
+async def get_folders(orchestrator_id: str = Query(...), _user: dict = Depends(require_viewer)):
+    """Lista os folders de um orchestrator (usado, ex.: pra escolher onde criar uma fila)."""
+    orch = _find_orchestrator(orchestrator_id, user=_user)
+    folders = await _list_folders(orch)
+    return {
+        "value": [
+            {"id": str(f.get("Id")), "name": f.get("FullyQualifiedName") or f.get("DisplayName")}
+            for f in folders
+        ]
+    }
+
+
+async def _folder_scoped_all(endpoint: str, user: dict | None):
+    """Lista um recurso folder-scoped (QueueDefinitions, Buckets, ...) em TODOS os
+    folders de TODOS os orchestrators. Marca cada item com _orchestratorId/_folderId/etc.
+    Devolve (items, failed) — failed = orchestrators com credencial que não responderam
+    (ex.: 403 por falta de scope), pra distinguir 'vazio' de 'sem permissão'."""
+    import asyncio
+    orchestrators = load_orchestrators(user=user)
+
+    async def for_orch(orch):
+        if not orch.get("clientId") or not orch.get("clientSecret"):
+            return [], False
+        folders = await _list_folders(orch)
+        folder_map = {
+            str(f.get("Id")): (f.get("FullyQualifiedName") or f.get("DisplayName"))
+            for f in folders
+        }
+        if orch.get("folderId"):
+            folder_map.setdefault(str(orch["folderId"]), None)
+
+        async def in_folder(fid, fname):
+            try:
+                data = await uipath_get(orch, endpoint, folder_id=fid)
+                out = []
+                for it in data.get("value", []):
+                    it["_orchestratorId"] = orch["id"]
+                    it["_orchestratorName"] = orch["name"]
+                    it["_folderId"] = fid
+                    it["_folderName"] = fname
+                    out.append(it)
+                return out, True
+            except Exception:
+                return [], False
+
+        results = await asyncio.gather(*[in_folder(fid, fname) for fid, fname in folder_map.items()])
+        merged, seen, ok_any = [], set(), False
+        for vals, ok in results:
+            ok_any = ok_any or ok
+            for it in vals:
+                if it.get("Id") in seen:
+                    continue
+                seen.add(it.get("Id"))
+                merged.append(it)
+        return merged, ok_any
+
+    results = await asyncio.gather(*[for_orch(o) for o in orchestrators])
+    all_items, healthy = [], set()
+    for (vals, ok), o in zip(results, orchestrators):
+        all_items.extend(vals)
+        if ok:
+            healthy.add(o["id"])
+    failed = [
+        {"id": o["id"], "name": o["name"]}
+        for o in orchestrators
+        if o.get("clientId") and o.get("clientSecret") and o["id"] not in healthy
+    ]
+    return all_items, failed
+
+
+# ─── Filas (QueueDefinitions + QueueItems) ────────────────
+# Requer os scopes OR.Queues.Read e OR.Queues.Write na External Application do UiPath.
+# As filas são escopadas por FOLDER: enumeramos os folders de cada orchestrator e
+# consultamos as filas em todos, marcando cada fila com _folderId/_folderName. Toda
+# operação em fila/transação precisa mandar o folder correto no header.
+
+# Status possíveis de uma transação (QueueItem) no UiPath.
+QUEUE_ITEM_STATUSES = ["New", "InProgress", "Failed", "Successful", "Abandoned", "Retried", "Deleted"]
+
+
+@app.get("/api/queues")
+async def get_queues(_user: dict = Depends(require_viewer)):
+    """Lista as filas (QueueDefinitions) de TODOS os folders de TODOS os orchestrators.
+    Reporta os orchestrators que falharam (ex.: 403 por falta do scope OR.Queues.Read)
+    pra distinguir 'sem filas' de 'sem permissão'."""
+    cached = get_cached("queues", ttl=10)
+    if cached:
+        return cached
+    all_queues, failed = await _folder_scoped_all("QueueDefinitions", _user)
+    result = {"value": all_queues, "failed": failed}
+    set_cached("queues", result)
+    return result
+
+
+@app.get("/api/queues/{queue_id}/items")
+async def get_queue_items(
+    queue_id: int,
+    orchestrator_id: str = Query(...),
+    folder_id: str | None = Query(None),
+    status: str | None = Query(None),
+    reference: str | None = Query(None),
+    top: int = Query(25, alias="$top"),
+    skip: int = Query(0, alias="$skip"),
+    _user: dict = Depends(require_viewer),
+):
+    """Lista as transações (QueueItems) de uma fila, com filtro por status, busca por
+    referência e paginação ($skip/$top). Devolve @odata.count pro frontend paginar."""
+    orch = _find_orchestrator(orchestrator_id, user=_user)
+    filter_parts = [f"QueueDefinitionId eq {queue_id}"]
+    if status and status != "all":
+        filter_parts.append(f"Status eq '{status}'")
+    if reference:
+        safe = reference.replace("'", "''")  # escapa aspas simples do OData
+        filter_parts.append(f"contains(Reference,'{safe}')")
+    params = {
+        "$filter": " and ".join(filter_parts),
+        "$top": top,
+        "$skip": skip,
+        # QueueItems não permite $orderby por CreationTime; Id é crescente com a criação,
+        # então "Id desc" traz as transações mais recentes.
+        "$orderby": "Id desc",
+        "$count": "true",
+    }
+    return await uipath_get(orch, "QueueItems", params, folder_id=folder_id)
+
+
+@app.get("/api/queues/summary")
+async def get_queues_summary(_user: dict = Depends(require_viewer)):
+    """Resumo das filas pro dashboard/alertas:
+    - new: backlog atual (transações aguardando processamento);
+    - failedToday/successfulToday: falhas e sucessos DE HOJE (viram 0 na virada do dia).
+
+    QueueItems não permite $filter por data — por isso as métricas de "hoje" vêm do
+    endpoint de estatística (RetrieveLastDaysProcessingRecords, registros horários)."""
+    import asyncio
+    from datetime import datetime, timezone, timedelta
+    cached = get_cached("queues_summary", ttl=20)
+    if cached:
+        return cached
+
+    # Busca filas + contagem de buckets e assets em paralelo (um fetch só pro dashboard).
+    (queues, failed), (buckets, _), (assets, _) = await asyncio.gather(
+        _folder_scoped_all("QueueDefinitions", _user),
+        _folder_scoped_all("Buckets", _user),
+        _folder_scoped_all("Assets", _user),
+    )
+    # Início do dia em horário de Brasília (UTC-3; Brasil não usa mais horário de verão),
+    # como datetime naive UTC pra comparar com ProcessingTime.
+    now_br = datetime.now(timezone(timedelta(hours=-3)))
+    day_start = now_br.replace(hour=0, minute=0, second=0, microsecond=0).astimezone(timezone.utc).replace(tzinfo=None)
+    sem = asyncio.Semaphore(8)
+    orchestrators = load_orchestrators(user=_user)
+
+    async def summarize(q):
+        orch = next((o for o in orchestrators if o["id"] == q["_orchestratorId"]), None)
+        if not orch:
+            return None
+
+        async def live_new():
+            async with sem:
+                params = {"$filter": f"QueueDefinitionId eq {q['Id']} and Status eq 'New'", "$top": 0, "$count": "true"}
+                try:
+                    d = await uipath_get(orch, "QueueItems", params, folder_id=q["_folderId"])
+                    return d.get("@odata.count", 0)
+                except Exception:
+                    return 0
+
+        async def today_stats():
+            async with sem:
+                endpoint = (
+                    f"QueueProcessingRecords/UiPathODataSvc.RetrieveLastDaysProcessingRecords"
+                    f"(daysNo=1,queueDefinitionId={q['Id']})"
+                )
+                try:
+                    d = await uipath_get(orch, endpoint, folder_id=q["_folderId"])
+                    failed_t = succ_t = 0
+                    for r in d.get("value", []):
+                        pt = _parse_iso(r.get("ProcessingTime"))
+                        if pt and pt >= day_start:
+                            failed_t += (r.get("NumberOfApplicationExceptions") or 0) + (r.get("NumberOfBusinessExceptions") or 0)
+                            succ_t += r.get("NumberOfSuccessfulTransactions") or 0
+                    return failed_t, succ_t
+                except Exception:
+                    return 0, 0
+
+        new_c, (failed_t, succ_t) = await asyncio.gather(live_new(), today_stats())
+        return {
+            "id": q["Id"], "name": q["Name"],
+            "orchestratorId": q["_orchestratorId"], "orchestratorName": q["_orchestratorName"],
+            "folderId": q["_folderId"], "folderName": q.get("_folderName"),
+            "counts": {"new": new_c, "failedToday": failed_t, "successfulToday": succ_t},
+        }
+
+    per_queue = [x for x in await asyncio.gather(*[summarize(q) for q in queues]) if x]
+    totals = {
+        "queues": len(per_queue), "new": 0, "failedToday": 0, "successfulToday": 0,
+        "buckets": len(buckets), "assets": len(assets),
+    }
+    for pq in per_queue:
+        for k in ("new", "failedToday", "successfulToday"):
+            totals[k] += pq["counts"].get(k, 0)
+
+    result = {"queues": per_queue, "totals": totals, "failed": failed}
+    set_cached("queues_summary", result)
+    return result
+
+
+@app.get("/api/queues/{queue_id}/counts")
+async def get_queue_item_counts(
+    queue_id: int,
+    orchestrator_id: str = Query(...),
+    folder_id: str | None = Query(None),
+    _user: dict = Depends(require_viewer),
+):
+    """Contagem de transações por status (em paralelo, via $count do OData)."""
+    import asyncio
+    orch = _find_orchestrator(orchestrator_id, user=_user)
+
+    async def count_for(st: str):
+        params = {
+            "$filter": f"QueueDefinitionId eq {queue_id} and Status eq '{st}'",
+            "$top": 0,
+            "$count": "true",
+        }
+        try:
+            data = await uipath_get(orch, "QueueItems", params, folder_id=folder_id)
+            return st, data.get("@odata.count", 0)
+        except Exception:
+            return st, 0
+
+    results = await asyncio.gather(*[count_for(st) for st in QUEUE_ITEM_STATUSES])
+    return {"counts": dict(results)}
+
+
+class CreateQueueRequest(BaseModel):
+    orchestratorId: str
+    folderId: str
+    name: str
+    description: str = ""
+    maxNumberOfRetries: int = 0
+    acceptAutomaticallyRetry: bool = False
+    enforceUniqueReference: bool = False
+    encrypted: bool = False
+
+
+@app.post("/api/queues/create")
+async def create_queue(req: CreateQueueRequest, _user: dict = Depends(require_operator)):
+    """Cria uma nova fila (QueueDefinition) no folder informado."""
+    orch = _find_orchestrator(req.orchestratorId, user=_user)
+    body = {
+        "Name": req.name,
+        "Description": req.description,
+        "MaxNumberOfRetries": req.maxNumberOfRetries,
+        "AcceptAutomaticallyRetry": req.acceptAutomaticallyRetry,
+        "EnforceUniqueReference": req.enforceUniqueReference,
+        "Encrypted": req.encrypted,
+    }
+    result = await uipath_post(orch, "QueueDefinitions", body, folder_id=req.folderId)
+    clear_cache()
+    _save_audit(_user, "queue.create", req.name, req.orchestratorId, orch.get("name"))
+    return result
+
+
+class UpdateQueueRequest(BaseModel):
+    orchestratorId: str
+    folderId: str
+    queueId: int
+    name: str
+    description: str = ""
+    maxNumberOfRetries: int = 0
+    acceptAutomaticallyRetry: bool = False
+    enforceUniqueReference: bool = False
+
+
+@app.post("/api/queues/update")
+async def update_queue(req: UpdateQueueRequest, _user: dict = Depends(require_operator)):
+    """Atualiza uma fila (PUT em QueueDefinitions). Mantém os campos não editáveis
+    (ex.: Encrypted não muda após a criação)."""
+    orch = _find_orchestrator(req.orchestratorId, user=_user)
+    current = await uipath_get(orch, f"QueueDefinitions({req.queueId})", folder_id=req.folderId)
+    current["Name"] = req.name
+    current["Description"] = req.description
+    current["MaxNumberOfRetries"] = req.maxNumberOfRetries
+    current["AcceptAutomaticallyRetry"] = req.acceptAutomaticallyRetry
+    current["EnforceUniqueReference"] = req.enforceUniqueReference
+    result = await uipath_put(orch, f"QueueDefinitions({req.queueId})", current, folder_id=req.folderId)
+    clear_cache()
+    _save_audit(_user, "queue.update", req.name, req.orchestratorId, orch.get("name"))
+    return result
+
+
+class DeleteQueueRequest(BaseModel):
+    orchestratorId: str
+    folderId: str
+    queueId: int
+    queueName: str | None = None
+
+
+@app.post("/api/queues/delete")
+async def delete_queue(req: DeleteQueueRequest, _user: dict = Depends(require_operator)):
+    """Exclui uma fila (QueueDefinition) do UiPath."""
+    orch = _find_orchestrator(req.orchestratorId, user=_user)
+    result = await uipath_delete(orch, f"QueueDefinitions({req.queueId})", folder_id=req.folderId)
+    clear_cache()
+    _save_audit(_user, "queue.delete", req.queueName or str(req.queueId), req.orchestratorId, orch.get("name"))
+    return result
+
+
+class AddQueueItemRequest(BaseModel):
+    orchestratorId: str
+    folderId: str
+    queueName: str
+    priority: str = "Normal"  # Low, Normal, High
+    reference: str | None = None
+    specificContent: dict = {}
+
+
+@app.post("/api/queues/items/add")
+async def add_queue_item(req: AddQueueItemRequest, _user: dict = Depends(require_operator)):
+    """Adiciona uma transação manual a uma fila (action AddQueueItem)."""
+    orch = _find_orchestrator(req.orchestratorId, user=_user)
+    item_data = {
+        "Name": req.queueName,
+        "Priority": req.priority,
+        "SpecificContent": req.specificContent or {},
+    }
+    if req.reference:
+        item_data["Reference"] = req.reference
+    body = {"itemData": item_data}
+    result = await uipath_post(orch, "Queues/UiPathODataSvc.AddQueueItem", body, folder_id=req.folderId)
+    clear_cache()
+    _save_audit(_user, "queue.item.add", req.queueName, req.orchestratorId, orch.get("name"))
+    return result
+
+
+class QueueItemActionRequest(BaseModel):
+    orchestratorId: str
+    folderId: str
+    itemId: int
+
+
+@app.post("/api/queues/items/delete")
+async def delete_queue_item(req: QueueItemActionRequest, _user: dict = Depends(require_operator)):
+    """Exclui uma transação (QueueItem) da fila."""
+    orch = _find_orchestrator(req.orchestratorId, user=_user)
+    result = await uipath_delete(orch, f"QueueItems({req.itemId})", folder_id=req.folderId)
+    clear_cache()
+    _save_audit(_user, "queue.item.delete", str(req.itemId), req.orchestratorId, orch.get("name"))
+    return result
+
+
+@app.post("/api/queues/items/retry")
+async def retry_queue_item(req: QueueItemActionRequest, _user: dict = Depends(require_operator)):
+    """Reprocessa uma transação: como o UiPath não expõe um 'retry' direto por item,
+    clonamos o SpecificContent/Reference num novo QueueItem (mesmo comportamento do
+    'Retry' manual do Orchestrator, que gera uma nova transação)."""
+    orch = _find_orchestrator(req.orchestratorId, user=_user)
+    item = await uipath_get(orch, f"QueueItems({req.itemId})", folder_id=req.folderId)
+    queue_id = item.get("QueueDefinitionId")
+    qdef = await uipath_get(orch, f"QueueDefinitions({queue_id})", folder_id=req.folderId)
+    item_data = {
+        "Name": qdef.get("Name"),
+        "Priority": item.get("Priority") or "Normal",
+        "SpecificContent": item.get("SpecificContent") or {},
+    }
+    if item.get("Reference"):
+        item_data["Reference"] = item["Reference"]
+    result = await uipath_post(orch, "Queues/UiPathODataSvc.AddQueueItem", {"itemData": item_data}, folder_id=req.folderId)
+    clear_cache()
+    _save_audit(_user, "queue.item.retry", qdef.get("Name") or str(req.itemId), req.orchestratorId, orch.get("name"))
+    return result
+
+
+# ─── Buckets (Storage Buckets + arquivos) ─────────────────
+# Requer o scope OR.Buckets na External Application. Buckets são folder-scoped (como filas).
+# As actions de arquivo recebem os parâmetros via QUERY STRING (não inline no path):
+#   GetFiles?directory=/   GetReadUri?path=   GetWriteUri?path=&contentType=   DeleteFile?path=
+# Upload/download passam pelos URIs pré-assinados devolvidos por Get(Write|Read)Uri.
+
+BUCKET_FN = "UiPath.Server.Configuration.OData"
+
+
+def _access_headers(dto: dict) -> dict:
+    """Normaliza o campo Headers do BlobFileAccessDto (pode vir como {Keys,Values} ou lista)."""
+    rh = dto.get("Headers")
+    if isinstance(rh, dict) and "Keys" in rh:
+        return dict(zip(rh.get("Keys") or [], rh.get("Values") or []))
+    if isinstance(rh, list):
+        return {x.get("Name") or x.get("Key"): x.get("Value") for x in rh}
+    if isinstance(rh, dict):
+        return rh
+    return {}
+
+
+@app.get("/api/buckets")
+async def get_buckets(_user: dict = Depends(require_viewer)):
+    """Lista os buckets de todos os folders/orchestrators (mesmo padrão das filas)."""
+    cached = get_cached("buckets", ttl=10)
+    if cached:
+        return cached
+    all_buckets, failed = await _folder_scoped_all("Buckets", _user)
+    result = {"value": all_buckets, "failed": failed}
+    set_cached("buckets", result)
+    return result
+
+
+@app.get("/api/buckets/{bucket_id}/files")
+async def get_bucket_files(
+    bucket_id: int,
+    orchestrator_id: str = Query(...),
+    folder_id: str | None = Query(None),
+    directory: str = Query("/"),
+    recursive: bool = Query(True),
+    _user: dict = Depends(require_viewer),
+):
+    """Lista os arquivos de um bucket (action GetFiles, params via query string).
+    recursive=true (padrão) traz também os arquivos em subpastas — sem ele, o UiPath
+    só lista a raiz e buckets com arquivos em subdiretórios apareceriam vazios."""
+    orch = _find_orchestrator(orchestrator_id, user=_user)
+    return await uipath_get(
+        orch, f"Buckets({bucket_id})/{BUCKET_FN}.GetFiles",
+        params={"directory": directory, "recursive": str(recursive).lower()}, folder_id=folder_id,
+    )
+
+
+class CreateBucketRequest(BaseModel):
+    orchestratorId: str
+    folderId: str
+    name: str
+    description: str = ""
+
+
+@app.post("/api/buckets/create")
+async def create_bucket(req: CreateBucketRequest, _user: dict = Depends(require_operator)):
+    """Cria um bucket (Orchestrator storage). Identifier é um GUID obrigatório."""
+    import uuid
+    orch = _find_orchestrator(req.orchestratorId, user=_user)
+    body = {
+        "Name": req.name,
+        "Description": req.description,
+        "Identifier": str(uuid.uuid4()),
+    }
+    result = await uipath_post(orch, "Buckets", body, folder_id=req.folderId)
+    clear_cache()
+    _save_audit(_user, "bucket.create", req.name, req.orchestratorId, orch.get("name"))
+    return result
+
+
+class UpdateBucketRequest(BaseModel):
+    orchestratorId: str
+    folderId: str
+    bucketId: int
+    name: str
+    description: str = ""
+
+
+@app.post("/api/buckets/update")
+async def update_bucket(req: UpdateBucketRequest, _user: dict = Depends(require_operator)):
+    """Atualiza nome/descrição de um bucket (PUT, preservando os demais campos)."""
+    orch = _find_orchestrator(req.orchestratorId, user=_user)
+    current = await uipath_get(orch, f"Buckets({req.bucketId})", folder_id=req.folderId)
+    current["Name"] = req.name
+    current["Description"] = req.description
+    result = await uipath_put(orch, f"Buckets({req.bucketId})", current, folder_id=req.folderId)
+    clear_cache()
+    _save_audit(_user, "bucket.update", req.name, req.orchestratorId, orch.get("name"))
+    return result
+
+
+class DeleteBucketRequest(BaseModel):
+    orchestratorId: str
+    folderId: str
+    bucketId: int
+    bucketName: str | None = None
+
+
+@app.post("/api/buckets/delete")
+async def delete_bucket(req: DeleteBucketRequest, _user: dict = Depends(require_operator)):
+    """Exclui um bucket inteiro."""
+    orch = _find_orchestrator(req.orchestratorId, user=_user)
+    result = await uipath_delete(orch, f"Buckets({req.bucketId})", folder_id=req.folderId)
+    clear_cache()
+    _save_audit(_user, "bucket.delete", req.bucketName or str(req.bucketId), req.orchestratorId, orch.get("name"))
+    return result
+
+
+class DeleteBucketFileRequest(BaseModel):
+    orchestratorId: str
+    folderId: str
+    bucketId: int
+    path: str
+
+
+@app.post("/api/buckets/files/delete")
+async def delete_bucket_file(req: DeleteBucketFileRequest, _user: dict = Depends(require_operator)):
+    """Exclui um arquivo de dentro do bucket (action DeleteFile, path via query param)."""
+    orch = _find_orchestrator(req.orchestratorId, user=_user)
+    result = await uipath_delete(
+        orch, f"Buckets({req.bucketId})/{BUCKET_FN}.DeleteFile",
+        folder_id=req.folderId, params={"path": req.path},
+    )
+    clear_cache()
+    _save_audit(_user, "bucket.file.delete", req.path, req.orchestratorId, orch.get("name"))
+    return result
+
+
+@app.post("/api/buckets/{bucket_id}/upload")
+async def upload_bucket_file(
+    bucket_id: int,
+    orchestrator_id: str = Form(...),
+    folder_id: str = Form(...),
+    path: str = Form(...),
+    file: UploadFile = File(...),
+    _user: dict = Depends(require_operator),
+):
+    """Envia um arquivo pro bucket: pega o URI pré-assinado (GetWriteUri) e faz o PUT dos bytes."""
+    orch = _find_orchestrator(orchestrator_id, user=_user)
+    content_type = file.content_type or "application/octet-stream"
+    access = await uipath_get(
+        orch, f"Buckets({bucket_id})/{BUCKET_FN}.GetWriteUri",
+        params={"path": path, "contentType": content_type}, folder_id=folder_id,
+    )
+    uri = access.get("Uri")
+    verb = (access.get("Verb") or "PUT").upper()
+    headers = _access_headers(access)
+    if access.get("RequiresAuth"):
+        token = await get_token(orch["id"], orch["clientId"], orch["clientSecret"])
+        headers["Authorization"] = f"Bearer {token}"
+    data = await file.read()
+    async with httpx.AsyncClient(timeout=120.0) as client:
+        resp = await client.request(verb, uri, headers=headers, content=data)
+        if resp.status_code not in (200, 201, 202, 204):
+            raise HTTPException(status_code=resp.status_code, detail=resp.text)
+    clear_cache()
+    _save_audit(_user, "bucket.file.upload", path, orchestrator_id, orch.get("name"))
+    return {"status": "ok", "path": path}
+
+
+@app.get("/api/buckets/{bucket_id}/download")
+async def download_bucket_file(
+    bucket_id: int,
+    orchestrator_id: str = Query(...),
+    folder_id: str | None = Query(None),
+    path: str = Query(...),
+    _user: dict = Depends(require_viewer),
+):
+    """Baixa um arquivo do bucket: pega o URI de leitura (GetReadUri) e faz stream dos bytes."""
+    orch = _find_orchestrator(orchestrator_id, user=_user)
+    access = await uipath_get(
+        orch, f"Buckets({bucket_id})/{BUCKET_FN}.GetReadUri",
+        params={"path": path}, folder_id=folder_id,
+    )
+    uri = access.get("Uri")
+    headers = _access_headers(access)
+    if access.get("RequiresAuth"):
+        token = await get_token(orch["id"], orch["clientId"], orch["clientSecret"])
+        headers["Authorization"] = f"Bearer {token}"
+    async with httpx.AsyncClient(timeout=120.0) as client:
+        resp = await client.get(uri, headers=headers)
+        if resp.status_code != 200:
+            raise HTTPException(status_code=resp.status_code, detail=resp.text)
+        content = resp.content
+        media_type = resp.headers.get("content-type", "application/octet-stream")
+    filename = path.rsplit("/", 1)[-1] or "download"
+    return Response(
+        content=content,
+        media_type=media_type,
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )
+
+
+# ─── Assets ───────────────────────────────────────────────
+# Requer o scope OR.Assets. Assets são folder-scoped (como filas/buckets).
+# Tipos: Text (StringValue), Integer (IntValue), Bool (BoolValue),
+# Credential (CredentialUsername + CredentialPassword write-only, não volta na leitura).
+
+ASSET_VALUE_TYPES = ["Text", "Integer", "Bool", "Credential"]
+
+
+@app.get("/api/assets")
+async def get_assets(_user: dict = Depends(require_viewer)):
+    """Lista os assets de todos os folders/orchestrators (mesmo padrão de filas/buckets)."""
+    cached = get_cached("assets", ttl=10)
+    if cached:
+        return cached
+    all_assets, failed = await _folder_scoped_all("Assets", _user)
+    result = {"value": all_assets, "failed": failed}
+    set_cached("assets", result)
+    return result
+
+
+def _apply_asset_value(body: dict, req) -> dict:
+    """Preenche o campo tipado do asset conforme o ValueType."""
+    vt = req.valueType
+    if vt == "Text":
+        body["StringValue"] = req.stringValue or ""
+    elif vt == "Integer":
+        body["IntValue"] = req.intValue or 0
+    elif vt == "Bool":
+        body["BoolValue"] = bool(req.boolValue)
+    elif vt == "Credential":
+        # None = não mexer (preserva o atual na edição); string = definir.
+        if req.credentialUsername is not None:
+            body["CredentialUsername"] = req.credentialUsername
+        if req.credentialPassword is not None:
+            body["CredentialPassword"] = req.credentialPassword
+    return body
+
+
+class CreateAssetRequest(BaseModel):
+    orchestratorId: str
+    folderId: str
+    name: str
+    description: str = ""
+    valueType: str = "Text"          # Text | Integer | Bool | Credential
+    valueScope: str = "Global"       # Global | PerRobot
+    stringValue: str | None = None
+    intValue: int | None = None
+    boolValue: bool | None = None
+    credentialUsername: str | None = None
+    credentialPassword: str | None = None
+
+
+@app.post("/api/assets/create")
+async def create_asset(req: CreateAssetRequest, _user: dict = Depends(require_operator)):
+    """Cria um asset no folder informado."""
+    if req.valueType not in ASSET_VALUE_TYPES:
+        raise HTTPException(status_code=400, detail=f"ValueType inválido: {req.valueType}")
+    orch = _find_orchestrator(req.orchestratorId, user=_user)
+    body = {
+        "Name": req.name,
+        "Description": req.description,
+        "ValueType": req.valueType,
+        "ValueScope": req.valueScope,
+    }
+    _apply_asset_value(body, req)
+    result = await uipath_post(orch, "Assets", body, folder_id=req.folderId)
+    clear_cache()
+    _save_audit(_user, "asset.create", req.name, req.orchestratorId, orch.get("name"))
+    return result
+
+
+class UpdateAssetRequest(BaseModel):
+    orchestratorId: str
+    folderId: str
+    assetId: int
+    name: str
+    description: str = ""
+    valueType: str = "Text"
+    stringValue: str | None = None
+    intValue: int | None = None
+    boolValue: bool | None = None
+    credentialUsername: str | None = None
+    credentialPassword: str | None = None
+
+
+@app.post("/api/assets/update")
+async def update_asset(req: UpdateAssetRequest, _user: dict = Depends(require_operator)):
+    """Atualiza um asset (PUT, preservando os demais campos). Para Credential, a senha
+    só é alterada se enviada (senão o UiPath mantém a atual)."""
+    orch = _find_orchestrator(req.orchestratorId, user=_user)
+    current = await uipath_get(orch, f"Assets({req.assetId})", folder_id=req.folderId)
+    current["Name"] = req.name
+    current["Description"] = req.description
+    _apply_asset_value(current, req)
+    result = await uipath_put(orch, f"Assets({req.assetId})", current, folder_id=req.folderId)
+    clear_cache()
+    _save_audit(_user, "asset.update", req.name, req.orchestratorId, orch.get("name"))
+    return result
+
+
+class DeleteAssetRequest(BaseModel):
+    orchestratorId: str
+    folderId: str
+    assetId: int
+    assetName: str | None = None
+
+
+@app.post("/api/assets/delete")
+async def delete_asset(req: DeleteAssetRequest, _user: dict = Depends(require_operator)):
+    """Exclui um asset."""
+    orch = _find_orchestrator(req.orchestratorId, user=_user)
+    result = await uipath_delete(orch, f"Assets({req.assetId})", folder_id=req.folderId)
+    clear_cache()
+    _save_audit(_user, "asset.delete", req.assetName or str(req.assetId), req.orchestratorId, orch.get("name"))
     return result
 
 

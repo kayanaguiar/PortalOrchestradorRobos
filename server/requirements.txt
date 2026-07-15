@@ -8,3 +8,5 @@ alembic
 pyjwt
 bcrypt
 slowapi
+python-multipart
+cryptography

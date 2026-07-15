@@ -20,7 +20,8 @@ import {
 import { motion } from "motion/react";
 import { fetchOrchestrators, saveOrchestrators, testOrchestrator, saveSettings } from "../../services/api";
 
-const SCOPES_NECESSARIOS = "OR.Robots.Read OR.Jobs.Read OR.Jobs.Write OR.Folders.Read OR.Audit.Read OR.Execution.Read OR.Execution.Write OR.Monitoring.Read OR.Administration.Write";
+const SCOPES_NECESSARIOS = "OR.Robots.Read OR.Jobs.Read OR.Jobs.Write OR.Folders.Read OR.Audit.Read OR.Execution.Read OR.Execution.Write OR.Monitoring.Read OR.Administration.Write OR.Queues OR.Buckets OR.Assets";
+const SCOPES_LIST = SCOPES_NECESSARIOS.split(" ");
 
 function formatTime(ts) {
   return new Date(ts).toLocaleTimeString("pt-BR", {
@@ -40,6 +41,13 @@ export default function SettingsPage({ pollingInterval, onPollingChange, searchT
   const [loadError, setLoadError] = useState(null);
   const [showSecrets, setShowSecrets] = useState({});
   const [showHelp, setShowHelp] = useState(false);
+  const [copiedScope, setCopiedScope] = useState(null);
+
+  const copyScope = (scope) => {
+    navigator.clipboard?.writeText(scope);
+    setCopiedScope(scope);
+    setTimeout(() => setCopiedScope((s) => (s === scope ? null : s)), 1500);
+  };
 
   // Carrega orchestrators do backend com retry
   const [orchLoading, setOrchLoading] = useState(true);
@@ -431,14 +439,36 @@ export default function SettingsPage({ pollingInterval, onPollingChange, searchT
                   Em <span className="text-white/70">Recursos / Escopos</span>, adicione o recurso <span className="font-mono text-accent">Orchestrator API Access</span> e
                   marque os escopos abaixo. Importante: em <span className="text-white/70">Application Scope</span>, não User Scope.
                 </p>
-                <div className="rounded-lg bg-surface-900/60 border border-white/5 p-3">
-                  <div className="flex items-start justify-between gap-3">
-                    <code className="text-[11px] font-mono text-white/60 leading-relaxed break-all">{SCOPES_NECESSARIOS}</code>
+                <p className="text-[12px] text-status-paused/90 bg-status-paused/10 border border-status-paused/20 rounded-lg px-3 py-2 mb-2 leading-relaxed">
+                  ⚠️ No UiPath os escopos são adicionados <b>um por um</b>. Use o botão de copiar de cada linha e cole individualmente.
+                </p>
+                <div className="rounded-lg bg-surface-900/60 border border-white/5 divide-y divide-white/[0.04]">
+                  {SCOPES_LIST.map((scope) => (
+                    <div key={scope} className="flex items-center justify-between gap-3 px-3 py-1.5">
+                      <code className="text-[11px] font-mono text-white/60 break-all">{scope}</code>
+                      <button
+                        onClick={() => copyScope(scope)}
+                        className={`shrink-0 text-[10px] font-mono rounded px-2 py-1 border transition-all cursor-pointer ${
+                          copiedScope === scope
+                            ? "text-status-running border-status-running/40 bg-status-running/10"
+                            : "text-accent border-accent/30 hover:bg-accent/10"
+                        }`}
+                      >
+                        {copiedScope === scope ? "✓ Copiado" : "Copiar"}
+                      </button>
+                    </div>
+                  ))}
+                  <div className="flex items-center justify-between gap-3 px-3 py-2">
+                    <span className="text-[10px] font-mono text-white/30">{SCOPES_LIST.length} escopos no total</span>
                     <button
-                      onClick={() => navigator.clipboard?.writeText(SCOPES_NECESSARIOS)}
-                      className="shrink-0 text-[10px] font-mono text-accent border border-accent/30 rounded px-2 py-1 hover:bg-accent/10 transition-all cursor-pointer"
+                      onClick={() => copyScope(SCOPES_NECESSARIOS)}
+                      className={`shrink-0 text-[10px] font-mono rounded px-2 py-1 border transition-all cursor-pointer ${
+                        copiedScope === SCOPES_NECESSARIOS
+                          ? "text-status-running border-status-running/40 bg-status-running/10"
+                          : "text-white/50 border-white/10 hover:bg-white/5"
+                      }`}
                     >
-                      Copiar
+                      {copiedScope === SCOPES_NECESSARIOS ? "✓ Copiado" : "Copiar todos"}
                     </button>
                   </div>
                 </div>

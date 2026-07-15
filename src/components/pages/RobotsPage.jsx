@@ -92,6 +92,19 @@ function formatDateTime(ts) {
   return `${formatDate(ts)} ${formatTime(ts)}`;
 }
 
+// Monta o $filter dos logs restrito à janela de tempo da execução (não o dia inteiro).
+// Buscar o dia todo com top:500 fazia execuções antigas do dia perderem os logs quando
+// o volume diário passava de 500 (JobKey não é filtrável no OData — filtramos depois no cliente).
+// Job ativo (Running/Pending) ainda não tem fim → estende até o fim do dia.
+const LOG_WINDOW_PAD_MS = 2 * 60 * 1000; // 2 min de folga nas bordas
+function buildJobLogFilter(processName, startTs, endTs, isActive, dateFilter) {
+  const start = new Date(new Date(startTs).getTime() - LOG_WINDOW_PAD_MS).toISOString();
+  const end = isActive
+    ? `${dateFilter}T23:59:59Z`
+    : new Date(new Date(endTs).getTime() + LOG_WINDOW_PAD_MS).toISOString();
+  return `ProcessName eq '${processName}' and TimeStamp ge ${start} and TimeStamp le ${end}`;
+}
+
 export default function RobotsPage({ robots, onAction, searchTerm: externalSearch, pollingInterval = 30 }) {
   const [searchParams, setSearchParams] = useSearchParams();
   const [selectedRobotId, setSelectedRobotId] = useState(searchParams.get("selected") || null);
@@ -121,17 +134,26 @@ export default function RobotsPage({ robots, onAction, searchTerm: externalSearc
     const dayStart = `${dateFilter}T00:00:00Z`;
     const dayEnd = `${dateFilter}T23:59:59Z`;
     const jobsFilter = `ReleaseName eq '${selectedRobot.name}' and CreationTime ge ${dayStart} and CreationTime le ${dayEnd}`;
-    fetchJobs({ top: 200, filter: jobsFilter })
+    fetchJobs({ top: 500, filter: jobsFilter })
       .then((data) => {
         setRobotJobs(data.value || []);
         // Atualiza logs do job expandido se houver
         const currentExpanded = expandedJobKeyRef.current;
-        if (!isInitial && currentExpanded && jobLogsRef.current[currentExpanded]) {
-          const jobDate = dateFilter;
-          const logDayStart = `${jobDate}T00:00:00Z`;
-          const logDayEnd = `${jobDate}T23:59:59Z`;
-          const filter = `ProcessName eq '${selectedRobot.name}' and TimeStamp ge ${logDayStart} and TimeStamp le ${logDayEnd}`;
-          fetchLogs({ top: 500, filter, orderby: "TimeStamp desc", orchestratorId: selectedRobot.orchestratorId })
+        const expandedJob = currentExpanded && (data.value || []).find((j) => j.Key === currentExpanded);
+        if (!isInitial && expandedJob && jobLogsRef.current[currentExpanded]) {
+          const isActive = expandedJob.State === "Running" || expandedJob.State === "Pending";
+          const filter = buildJobLogFilter(
+            selectedRobot.name,
+            expandedJob.StartTime || expandedJob.CreationTime,
+            expandedJob.EndTime || expandedJob.StartTime || expandedJob.CreationTime,
+            isActive,
+            dateFilter,
+          );
+          fetchLogs({
+            top: 500, filter, orderby: "TimeStamp desc",
+            orchestratorId: selectedRobot.orchestratorId,
+            jobEndedAt: isActive ? undefined : (expandedJob.EndTime || expandedJob.StartTime || expandedJob.CreationTime),
+          })
             .then((logData) => {
               const allLogs = logData.value || [];
               const filtered = allLogs
@@ -197,10 +219,19 @@ export default function RobotsPage({ robots, onAction, searchTerm: externalSearc
     setJobLogsLoading(execution.jobKey);
     try {
       const jobDate = (execution.firstTimestamp || "").split("T")[0];
-      const dayStart = `${jobDate}T00:00:00Z`;
-      const dayEnd = `${jobDate}T23:59:59Z`;
-      const filter = `ProcessName eq '${selectedRobot.name}' and TimeStamp ge ${dayStart} and TimeStamp le ${dayEnd}`;
-      const data = await fetchLogs({ top: 500, filter, orderby: "TimeStamp desc", orchestratorId: selectedRobot.orchestratorId });
+      const isActive = execution.jobState === "Running" || execution.jobState === "Pending";
+      const filter = buildJobLogFilter(
+        selectedRobot.name,
+        execution.firstTimestamp,
+        execution.lastTimestamp,
+        isActive,
+        jobDate,
+      );
+      const data = await fetchLogs({
+        top: 500, filter, orderby: "TimeStamp desc",
+        orchestratorId: selectedRobot.orchestratorId,
+        jobEndedAt: isActive ? undefined : execution.lastTimestamp,
+      });
       const allLogs = data.value || [];
       const filtered = allLogs
         .filter((log) => log.JobKey === execution.jobKey)

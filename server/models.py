@@ -2,6 +2,7 @@ from sqlalchemy import Column, String, Text, DateTime, ForeignKey, Boolean, Inde
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.sql import func
 from database import Base
+from crypto_util import encrypt_secret, decrypt_secret
 
 
 class Orchestrator(Base):
@@ -23,7 +24,7 @@ class Orchestrator(Base):
             "baseUrl": self.base_url,
             "folderId": self.folder_id,
             "clientId": self.client_id,
-            "clientSecret": self.client_secret,
+            "clientSecret": decrypt_secret(self.client_secret),
             "status": self.status,
             "ownerId": self.owner_id,
         }
@@ -36,7 +37,7 @@ class Orchestrator(Base):
             base_url=data["baseUrl"],
             folder_id=data["folderId"],
             client_id=data["clientId"],
-            client_secret=data["clientSecret"],
+            client_secret=encrypt_secret(data["clientSecret"]),
             status=data.get("status", "unknown"),
             owner_id=data.get("ownerId"),
         )

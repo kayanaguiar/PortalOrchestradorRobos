@@ -28,6 +28,18 @@ const stateConfig = {
 
 const PAGE_SIZE = 20;
 
+// Restringe o $filter dos logs à janela de tempo do job (não o dia inteiro).
+// Buscar o dia todo com top:500 fazia jobs antigos do dia perderem os logs quando
+// o volume diário passava de 500 (JobKey não é filtrável no OData — filtra depois no cliente).
+const LOG_WINDOW_PAD_MS = 2 * 60 * 1000; // 2 min de folga nas bordas
+function buildJobLogFilter(processName, startTs, endTs, isActive, dateStr) {
+  const start = new Date(new Date(startTs).getTime() - LOG_WINDOW_PAD_MS).toISOString();
+  const end = isActive
+    ? `${dateStr}T23:59:59Z`
+    : new Date(new Date(endTs).getTime() + LOG_WINDOW_PAD_MS).toISOString();
+  return `ProcessName eq '${processName}' and TimeStamp ge ${start} and TimeStamp le ${end}`;
+}
+
 function todayStr() {
   return new Date().toISOString().split("T")[0];
 }
@@ -87,12 +99,21 @@ export default function LogsPage({ robots, searchTerm: externalSearch }) {
 
     setJobLogsLoading(job.Id);
     try {
-      // Filtra por ProcessName + data do job pra limitar o volume
+      // Filtra pela janela de tempo do próprio job pra limitar o volume
       const jobDate = (job.CreationTime || "").split("T")[0];
-      const dayStart = `${jobDate}T00:00:00Z`;
-      const dayEnd = `${jobDate}T23:59:59Z`;
-      const filter = `ProcessName eq '${job.ReleaseName}' and TimeStamp ge ${dayStart} and TimeStamp le ${dayEnd}`;
-      const data = await fetchLogs({ top: 500, filter, orderby: "TimeStamp desc", orchestratorId: job._orchestratorId });
+      const isActive = job.State === "Running" || job.State === "Pending";
+      const filter = buildJobLogFilter(
+        job.ReleaseName,
+        job.StartTime || job.CreationTime,
+        job.EndTime || job.StartTime || job.CreationTime,
+        isActive,
+        jobDate,
+      );
+      const data = await fetchLogs({
+        top: 500, filter, orderby: "TimeStamp desc",
+        orchestratorId: job._orchestratorId,
+        jobEndedAt: isActive ? undefined : (job.EndTime || job.StartTime || job.CreationTime),
+      });
       const allLogs = data.value || [];
       // Filtra pelo JobKey no frontend e reordena cronologicamente
       const filtered = allLogs
@@ -112,7 +133,7 @@ export default function LogsPage({ robots, searchTerm: externalSearch }) {
     const dayStart = `${dateFilter}T00:00:00Z`;
     const dayEnd = `${dateFilter}T23:59:59Z`;
     const filter = `CreationTime ge ${dayStart} and CreationTime le ${dayEnd}`;
-    fetchJobs({ top: 500, filter })
+    fetchJobs({ top: 1000, filter })
       .then((data) => setAllJobs(data.value || []))
       .catch(() => setAllJobs([]))
       .finally(() => setLoading(false));

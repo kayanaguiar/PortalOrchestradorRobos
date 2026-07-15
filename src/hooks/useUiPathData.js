@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback, useRef } from "react";
-import { fetchLogs, fetchJobs, fetchProcesses, fetchSessions, fetchHealth, fetchTriggers } from "../services/api";
+import { fetchLogs, fetchJobs, fetchProcesses, fetchSessions, fetchHealth, fetchTriggers, fetchQueuesSummary } from "../services/api";
 
 export function usePolling(fetchFn, { interval = 30000, enabled = true } = {}) {
   const [data, setData] = useState(null);
@@ -103,6 +103,20 @@ export function useUiPathTriggers(interval = 120000) {
   return {
     triggers: data?.value || [],
     autoDisabled: data?.autoDisabled || [],
+    loading,
+    error,
+    refresh,
+  };
+}
+
+export function useUiPathQueuesSummary(interval = 60000) {
+  const fetchFn = useCallback(() => fetchQueuesSummary(), []);
+  const { data, loading, error, refresh } = usePolling(fetchFn, { interval });
+
+  return {
+    summary: data || null,
+    totals: data?.totals || { queues: 0, new: 0, failedToday: 0, successfulToday: 0, buckets: 0, assets: 0 },
+    queues: data?.queues || [],
     loading,
     error,
     refresh,

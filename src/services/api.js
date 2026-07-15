@@ -140,13 +140,14 @@ export function getStoredUser() {
 
 // ─── Logs ────────────────────────────────────────
 
-export async function fetchLogs({ top = 50, skip = 0, filter, orderby, orchestratorId } = {}) {
+export async function fetchLogs({ top = 50, skip = 0, filter, orderby, orchestratorId, jobEndedAt } = {}) {
   return request(`${API_BASE}/logs`, {
     "$top": top,
     "$skip": skip,
     "$filter": filter,
     "$orderby": orderby,
     orchestrator_id: orchestratorId,
+    job_ended_at: jobEndedAt,
   });
 }
 
@@ -237,6 +238,163 @@ export async function createTrigger(data) {
 
 export async function deleteTrigger(orchestratorId, triggerId) {
   return postRequest("/triggers/delete", { orchestratorId, triggerId });
+}
+
+// ─── Folders ─────────────────────────────────────
+
+export async function fetchFolders(orchestratorId) {
+  return request(`${API_BASE}/folders`, { orchestrator_id: orchestratorId });
+}
+
+// ─── Filas (Queues) ──────────────────────────────
+// Filas são escopadas por folder — folderId é obrigatório nas operações por fila.
+
+export async function fetchQueues() {
+  return request(`${API_BASE}/queues`);
+}
+
+export async function fetchQueueItems(queueId, orchestratorId, folderId, { status, reference, top = 25, skip = 0 } = {}) {
+  return request(`${API_BASE}/queues/${queueId}/items`, {
+    orchestrator_id: orchestratorId,
+    folder_id: folderId,
+    status: status && status !== "all" ? status : undefined,
+    reference: reference || undefined,
+    "$top": top,
+    "$skip": skip,
+  });
+}
+
+export async function fetchQueuesSummary() {
+  return request(`${API_BASE}/queues/summary`);
+}
+
+export async function fetchQueueItemCounts(queueId, orchestratorId, folderId) {
+  return request(`${API_BASE}/queues/${queueId}/counts`, {
+    orchestrator_id: orchestratorId,
+    folder_id: folderId,
+  });
+}
+
+export async function createQueue(data) {
+  return postRequest("/queues/create", data);
+}
+
+export async function updateQueue(data) {
+  return postRequest("/queues/update", data);
+}
+
+export async function deleteQueue(orchestratorId, folderId, queueId, queueName) {
+  return postRequest("/queues/delete", { orchestratorId, folderId, queueId, queueName });
+}
+
+export async function addQueueItem(data) {
+  return postRequest("/queues/items/add", data);
+}
+
+export async function retryQueueItem(orchestratorId, folderId, itemId) {
+  return postRequest("/queues/items/retry", { orchestratorId, folderId, itemId });
+}
+
+export async function deleteQueueItem(orchestratorId, folderId, itemId) {
+  return postRequest("/queues/items/delete", { orchestratorId, folderId, itemId });
+}
+
+// ─── Buckets ─────────────────────────────────────
+// Buckets são folder-scoped — folderId obrigatório nas operações.
+
+export async function fetchBuckets() {
+  return request(`${API_BASE}/buckets`);
+}
+
+export async function fetchBucketFiles(bucketId, orchestratorId, folderId, directory = "/") {
+  return request(`${API_BASE}/buckets/${bucketId}/files`, {
+    orchestrator_id: orchestratorId,
+    folder_id: folderId,
+    directory,
+  });
+}
+
+export async function createBucket(data) {
+  return postRequest("/buckets/create", data);
+}
+
+export async function updateBucket(data) {
+  return postRequest("/buckets/update", data);
+}
+
+export async function deleteBucket(orchestratorId, folderId, bucketId, bucketName) {
+  return postRequest("/buckets/delete", { orchestratorId, folderId, bucketId, bucketName });
+}
+
+export async function deleteBucketFile(orchestratorId, folderId, bucketId, path) {
+  return postRequest("/buckets/files/delete", { orchestratorId, folderId, bucketId, path });
+}
+
+export async function uploadBucketFile({ bucketId, orchestratorId, folderId, path, file }) {
+  const form = new FormData();
+  form.append("orchestrator_id", orchestratorId);
+  form.append("folder_id", folderId);
+  form.append("path", path);
+  form.append("file", file);
+  const token = localStorage.getItem("token");
+  const res = await fetch(`${API_BASE}/buckets/${bucketId}/upload`, {
+    method: "POST",
+    headers: token ? { Authorization: `Bearer ${token}` } : {},
+    body: form,
+  });
+  if (res.status === 401) {
+    localStorage.removeItem("token");
+    localStorage.removeItem("user");
+    window.location.reload();
+    throw new Error("Sessão expirada");
+  }
+  if (!res.ok) {
+    const detail = await res.text().catch(() => res.statusText);
+    throw new Error(`API ${res.status}: ${detail}`);
+  }
+  return res.json();
+}
+
+export async function downloadBucketFile({ bucketId, orchestratorId, folderId, path }) {
+  const token = localStorage.getItem("token");
+  const url = new URL(`${API_BASE}/buckets/${bucketId}/download`, window.location.origin);
+  url.searchParams.set("orchestrator_id", orchestratorId);
+  if (folderId) url.searchParams.set("folder_id", folderId);
+  url.searchParams.set("path", path);
+  const res = await fetch(url, { headers: token ? { Authorization: `Bearer ${token}` } : {} });
+  if (!res.ok) {
+    const detail = await res.text().catch(() => res.statusText);
+    throw new Error(`API ${res.status}: ${detail}`);
+  }
+  const blob = await res.blob();
+  const filename = path.split("/").pop() || "download";
+  const objUrl = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = objUrl;
+  a.download = filename;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  URL.revokeObjectURL(objUrl);
+}
+
+// ─── Assets ──────────────────────────────────────
+// Assets são folder-scoped — folderId obrigatório nas operações.
+
+export async function fetchAssets() {
+  return request(`${API_BASE}/assets`);
+}
+
+export async function createAsset(data) {
+  return postRequest("/assets/create", data);
+}
+
+export async function updateAsset(data) {
+  return postRequest("/assets/update", data);
+}
+
+export async function deleteAsset(orchestratorId, folderId, assetId, assetName) {
+  return postRequest("/assets/delete", { orchestratorId, folderId, assetId, assetName });
 }
 
 // ─── Archived Processes ──────────────────────────

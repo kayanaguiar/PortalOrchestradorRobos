@@ -24,6 +24,13 @@ docker compose up --build
 ```
 Acessa http://localhost
 
+### Testes (backend, pytest)
+```bash
+# Roda num container efêmero (não sobe db, não afeta o ambiente rodando)
+docker compose run --rm --no-deps backend sh -c "pip install -q -r requirements-dev.txt && python -m pytest -q"
+```
+Testes em `server/tests/` — mockam UiPath e banco (não precisam de Postgres nem rede). Cobrem: negociação de scopes (`uipath_auth`), helpers de parsing/folder/headers, cache, e endpoints (`/api/ping`, `/api/queues` agregação cross-folder + `failed`, montagem do `$filter` de transações). Deps de teste em `requirements-dev.txt` (fora da imagem de produção).
+
 ## Estrutura do projeto
 ```
 src/
@@ -54,6 +61,9 @@ server/
 - `/robots` — Robôs (lista + detalhe com **jobs ativos** Running+Pending listados separadamente + logs por execução + polling)
 - `/history` — Histórico de Jobs (filtro por data/status/robô, filtros viram cards no mobile)
 - `/triggers` — Gatilhos (agendamentos e triggers do UiPath, criar/editar/excluir)
+- `/queues` — Filas (CRUD de QueueDefinitions + transações QueueItems: ver por status, adicionar/retry/excluir item). Retry = clona SpecificContent num novo item (UiPath não expõe retry por item). Requer scope `OR.Queues` (parent autoriza leitura+escrita)
+- `/buckets` — Buckets (CRUD de Storage Buckets + arquivos: listar/upload/download/excluir). Upload/download passam pelos URIs pré-assinados (GetWriteUri/GetReadUri) proxiados pelo backend. Actions de arquivo usam params via query string. Requer scope `OR.Buckets`
+- `/assets` — Assets (CRUD dos 4 tipos: Text/Integer/Bool/Credential; escopo Global ou PerRobot). Senha de credencial é write-only (não volta na leitura). Valores por-robô não editáveis nesta versão. Requer scope `OR.Assets`
 - `/audit` — Auditoria (admin only, histórico filtrável por usuário/ação/robô/datas)
 - `/users` — Usuários (admin only)
 - `/settings` — Configurações de Orchestrators e polling (botão salvar fixo no rodapé)
@@ -69,6 +79,7 @@ server/
 - Limpar cache após ações (start/stop/update)
 - **`request_all_orchestrators_with_status`**: usar quando precisar distinguir "vazio porque vazio" de "vazio porque deu erro" (já usado em `/api/sessions`)
 - **JWT_SECRET validado no boot**: backend recusa subir com valor vazio, placeholder ou < 32 chars
+- **Client Secrets criptografados em repouso**: `crypto_util.py` (Fernet, chave derivada do `JWT_SECRET` ou do `SECRET_ENCRYPTION_KEY`). Cripto acontece só na fronteira do banco — `Orchestrator.from_dict` encripta ao gravar, `to_dict` decripta ao ler (prefixo `enc:`); o resto do código sempre vê texto puro. Valores sem prefixo = legado (texto puro) tratado de forma transparente. Migração idempotente no `entrypoint.sh` (`encrypt_existing_secrets`) encripta o que estava em texto puro
 - **Healthcheck público em `/api/ping`** (sem auth) — usado pelo Docker healthcheck
 - **Refresh de token**: `POST /api/auth/refresh` emite novo JWT a partir de um válido (usado pelo frontend a cada 12h)
 - **Snapshots in-memory** (`_previous_online_assistants`, `_previous_enabled_triggers`, `_manually_disabled_triggers`): cuidado com `--workers > 1` no uvicorn, cada worker tem seu snapshot
@@ -80,7 +91,7 @@ server/
 - **Começa do zero**: no primeiro boot de cada orchestrator a marca é fixada em "agora" — não importa histórico antigo
 - **Idempotência**: insere com `ON CONFLICT (id) DO NOTHING` usando o `Id` do log do UiPath como PK
 - **Retenção**: 1x/dia apaga logs com mais de `LOG_RETENTION_DAYS` (180)
-- **Leitura híbrida em `/api/logs`**: busca de **hoje** → ao vivo no UiPath (sem defasagem); busca de **dias anteriores** → Postgres (instantâneo), com **fallback** pro UiPath se o banco ainda não tiver aqueles logs. `_parse_log_filter` extrai process_name/datas do `$filter`; `_is_historical` decide a fonte. Frontend não muda
+- **Leitura híbrida em `/api/logs` — por ESTADO, não só por data**: dias anteriores → Postgres; **job já finalizado há > 2 ciclos do coletor** (frontend passa `job_ended_at`) → Postgres **mesmo sendo de hoje** (logs de job terminado são imutáveis); job rodando / recém-terminado / feed ao vivo → UiPath. Sempre com **fallback** pro UiPath se o banco ainda não tiver os logs. Helpers: `_parse_log_filter`, `_is_historical`, `_job_finished_and_collected`. Frontend (`RobotsPage`/`LogsPage`) passa `jobEndedAt` só quando o job não está Running/Pending
 - O **collector espera `backend` ficar healthy** (depends_on) pra garantir que a migração já criou a tabela
 
 ### Frontend
@@ -118,6 +129,7 @@ server/
 OR.Robots.Read OR.Jobs.Read OR.Jobs.Write OR.Folders.Read
 OR.Audit.Read OR.Execution.Read OR.Execution.Write
 OR.Monitoring.Read OR.Administration.Write
+OR.Queues OR.Buckets OR.Assets
 ```
 Tipo: Confidential, scopes em Application Scope (não User Scope).
 O mesmo passo a passo está disponível no portal: `/settings` → botão **"Como conectar?"**.
@@ -125,6 +137,7 @@ O mesmo passo a passo está disponível no portal: `/settings` → botão **"Com
 ## Variáveis de ambiente
 - `UIPATH_TOKEN_URL` — URL de autenticação (default: cloud.uipath.com)
 - `JWT_SECRET` — **OBRIGATÓRIO**, >= 32 chars, não pode ser `TROQUE_AQUI`. Gere com `python -c "import secrets; print(secrets.token_urlsafe(48))"`
+- `SECRET_ENCRYPTION_KEY` — **opcional**. Chave usada pra criptografar os Client Secrets dos orchestrators no banco. Se não definida, é derivada do `JWT_SECRET`. Defina uma dedicada se quiser rotacionar o JWT_SECRET sem perder os secrets (trocar essa chave torna os secrets já gravados ilegíveis → precisam ser reinseridos)
 - `DB_PASSWORD` — senha do Postgres
 - `DATABASE_URL` — PostgreSQL (para Docker)
 - `VITE_API_URL` — URL do backend se hospedado separado
