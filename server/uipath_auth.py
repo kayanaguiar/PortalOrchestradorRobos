@@ -37,7 +37,7 @@ _token_cache: dict[str, dict] = {}
 _scope_cache: dict[str, dict] = {}
 
 # De quanto em quanto tempo re-tentar o conjunto completo num orchestrator reduzido.
-RETRY_REDUCED_AFTER = 300  # 5 min
+RETRY_REDUCED_AFTER = 120  # 2 min
 
 
 def clear_token_cache():

@@ -1352,6 +1352,36 @@ async def delete_queue_item(req: QueueItemActionRequest, _user: dict = Depends(r
     return result
 
 
+class DeleteQueueItemsBatchRequest(BaseModel):
+    orchestratorId: str
+    folderId: str
+    itemIds: list[int]
+
+
+@app.post("/api/queues/items/delete-batch")
+async def delete_queue_items_batch(req: DeleteQueueItemsBatchRequest, _user: dict = Depends(require_operator)):
+    """Exclui várias transações de uma vez (em paralelo). O UiPath não tem delete em
+    lote por item, então deletamos cada uma; devolve quantas foram e quais falharam."""
+    import asyncio
+    orch = _find_orchestrator(req.orchestratorId, user=_user)
+    sem = asyncio.Semaphore(8)
+
+    async def delete_one(item_id):
+        async with sem:
+            try:
+                await uipath_delete(orch, f"QueueItems({item_id})", folder_id=req.folderId)
+                return item_id, True
+            except Exception:
+                return item_id, False
+
+    results = await asyncio.gather(*[delete_one(i) for i in req.itemIds])
+    deleted = [i for i, ok in results if ok]
+    failed = [i for i, ok in results if not ok]
+    clear_cache()
+    _save_audit(_user, "queue.item.delete.batch", f"{len(deleted)} transações", req.orchestratorId, orch.get("name"))
+    return {"deleted": len(deleted), "failed": failed}
+
+
 @app.post("/api/queues/items/retry")
 async def retry_queue_item(req: QueueItemActionRequest, _user: dict = Depends(require_operator)):
     """Reprocessa uma transação: como o UiPath não expõe um 'retry' direto por item,

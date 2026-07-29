@@ -29,11 +29,13 @@ import {
   addQueueItem,
   retryQueueItem,
   deleteQueueItem,
+  deleteQueueItemsBatch,
   fetchOrchestrators,
   fetchFolders,
 } from "../../services/api";
 import ConfirmModal from "../ConfirmModal";
 import CustomSelect from "../CustomSelect";
+import Checkbox from "../Checkbox";
 
 const STATUS_META = {
   New: { label: "Novo", color: "text-accent", bg: "bg-accent/15" },
@@ -160,6 +162,10 @@ export default function QueuesPage({ addToast, userRole }) {
   const [itemSearch, setItemSearch] = useState("");
   const [itemPage, setItemPage] = useState(0);
   const [itemTotal, setItemTotal] = useState(0);
+  const [selectedItems, setSelectedItems] = useState(new Set());
+  const [pendingBatchDelete, setPendingBatchDelete] = useState(null);
+  const [deletingBatch, setDeletingBatch] = useState(false);
+  const [selectingAll, setSelectingAll] = useState(false);
 
   // Modais
   const [editingQueue, setEditingQueue] = useState(null);
@@ -284,6 +290,7 @@ export default function QueuesPage({ addToast, userRole }) {
     setItemSearch("");
     setItemPage(0);
     setExpandedItemId(null);
+    setSelectedItems(new Set());
     loadCounts(queue);
     loadItems(queue, { status: statusByKey[key] || "all", search: "", page: 0 });
   }, [expandedKey, statusByKey, loadCounts, loadItems]);
@@ -301,6 +308,58 @@ export default function QueuesPage({ addToast, userRole }) {
     setItemPage(page);
     loadItems(queue, { status: statusByKey[key] || "all", search: itemSearch, page });
   }, [statusByKey, itemSearch, loadItems]);
+
+  const toggleItemSelected = useCallback((id) => {
+    setSelectedItems((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id); else next.add(id);
+      return next;
+    });
+  }, []);
+
+  const toggleSelectAllOnPage = useCallback((pageItems) => {
+    setSelectedItems((prev) => {
+      const allSel = pageItems.length > 0 && pageItems.every((it) => prev.has(it.Id));
+      const next = new Set(prev);
+      pageItems.forEach((it) => { if (allSel) next.delete(it.Id); else next.add(it.Id); });
+      return next;
+    });
+  }, []);
+
+  // Seleciona TODAS as transações que casam o filtro atual (todas as páginas),
+  // buscando os ids de uma vez (o checkbox do topo só marca a página visível).
+  const selectAllMatching = useCallback(async (queue) => {
+    const key = queueKey(queue);
+    setSelectingAll(true);
+    try {
+      const data = await fetchQueueItems(queue.Id, queue._orchestratorId, queue._folderId, {
+        status: statusByKey[key] || "all", reference: itemSearch, top: itemTotal, skip: 0,
+      });
+      setSelectedItems(new Set((data.value || []).map((it) => it.Id)));
+    } catch (err) {
+      addToast?.("error", `Erro ao selecionar todas: ${err.message}`);
+    } finally {
+      setSelectingAll(false);
+    }
+  }, [statusByKey, itemSearch, itemTotal, addToast]);
+
+  const handleBatchDeleteItems = useCallback(async () => {
+    if (!pendingBatchDelete) return;
+    const { queue, ids } = pendingBatchDelete;
+    setDeletingBatch(true);
+    try {
+      const res = await deleteQueueItemsBatch(queue._orchestratorId, queue._folderId, ids);
+      addToast?.("success", `${res.deleted} transação${res.deleted !== 1 ? "ões" : ""} excluída${res.deleted !== 1 ? "s" : ""}`);
+      if (res.failed?.length) addToast?.("error", `${res.failed.length} não puderam ser excluídas`);
+      setSelectedItems(new Set());
+      refreshItems(queue);
+    } catch (err) {
+      addToast?.("error", `Erro ao excluir: ${err.message}`);
+    } finally {
+      setDeletingBatch(false);
+      setPendingBatchDelete(null);
+    }
+  }, [pendingBatchDelete, refreshItems, addToast]);
 
   // Busca por referência (debounce)
   useEffect(() => {
@@ -743,6 +802,51 @@ export default function QueuesPage({ addToast, userRole }) {
 
                       {!isItemsLoading && items.length > 0 && (
                         <div className="rounded-lg border border-white/5 overflow-hidden divide-y divide-white/[0.03]">
+                          {/* Barra de seleção em lote */}
+                          {canWrite && (
+                            <div className="px-3 py-2 flex items-center gap-3 bg-surface-800/40 flex-wrap">
+                              <Checkbox
+                                checked={items.length > 0 && items.every((it) => selectedItems.has(it.Id))}
+                                indeterminate={items.some((it) => selectedItems.has(it.Id)) && !items.every((it) => selectedItems.has(it.Id))}
+                                onChange={() => toggleSelectAllOnPage(items)}
+                                title="Selecionar todas desta página"
+                              />
+                              <span className="text-[10px] text-white/40 font-mono">
+                                {selectedItems.size > 0 ? `${selectedItems.size} selecionada${selectedItems.size !== 1 ? "s" : ""}` : "Selecionar transações"}
+                              </span>
+
+                              {/* Selecionar TODAS as que casam o filtro (todas as páginas) */}
+                              {items.length > 0 && items.every((it) => selectedItems.has(it.Id)) && itemTotal > items.length && selectedItems.size < itemTotal && (
+                                <button
+                                  onClick={() => selectAllMatching(queue)}
+                                  disabled={selectingAll}
+                                  className="text-[10px] font-mono text-accent hover:text-accent-light transition-colors cursor-pointer disabled:opacity-50"
+                                >
+                                  {selectingAll ? "Selecionando..." : `Selecionar todas as ${itemTotal}`}
+                                </button>
+                              )}
+                              {itemTotal > 0 && selectedItems.size >= itemTotal && (
+                                <span className="text-[10px] font-mono text-status-running">todas as {itemTotal} selecionadas</span>
+                              )}
+
+                              {selectedItems.size > 0 && (
+                                <div className="ml-auto flex items-center gap-2">
+                                  <button
+                                    onClick={() => setSelectedItems(new Set())}
+                                    className="text-[10px] font-mono text-white/40 hover:text-white/70 transition-colors cursor-pointer"
+                                  >
+                                    Limpar
+                                  </button>
+                                  <button
+                                    onClick={() => setPendingBatchDelete({ queue, ids: [...selectedItems] })}
+                                    className="flex items-center gap-1.5 px-2.5 py-1 rounded border border-status-error/30 text-status-error text-[10px] font-medium hover:bg-status-error/10 transition-all cursor-pointer"
+                                  >
+                                    <Trash2 className="w-3 h-3" /> Excluir selecionadas
+                                  </button>
+                                </div>
+                              )}
+                            </div>
+                          )}
                           {items.map((item) => {
                             const meta = STATUS_META[item.Status] || { label: item.Status, color: "text-white/40", bg: "bg-white/5" };
                             const acting = itemActionId === item.Id;
@@ -754,6 +858,12 @@ export default function QueuesPage({ addToast, userRole }) {
                                   className="px-3 py-2.5 flex flex-col sm:flex-row sm:items-center gap-2 sm:gap-3 hover:bg-white/[0.02] cursor-pointer"
                                 >
                                   <div className="flex items-center gap-2 min-w-0 flex-1">
+                                    {canWrite && (
+                                      <Checkbox
+                                        checked={selectedItems.has(item.Id)}
+                                        onChange={() => toggleItemSelected(item.Id)}
+                                      />
+                                    )}
                                     {isItemOpen
                                       ? <ChevronDown className="w-3 h-3 text-white/30 shrink-0" />
                                       : <ChevronRight className="w-3 h-3 text-white/30 shrink-0" />}
@@ -859,6 +969,17 @@ export default function QueuesPage({ addToast, userRole }) {
         variant="danger"
         onConfirm={handleDeleteItem}
         onCancel={() => setPendingDeleteItem(null)}
+      />
+
+      {/* Confirm: excluir transações em lote */}
+      <ConfirmModal
+        open={!!pendingBatchDelete}
+        title="Excluir transações selecionadas"
+        message={`Excluir ${pendingBatchDelete?.ids?.length || 0} transação${(pendingBatchDelete?.ids?.length || 0) !== 1 ? "ões" : ""} selecionada${(pendingBatchDelete?.ids?.length || 0) !== 1 ? "s" : ""}?\n\nEsta ação não pode ser desfeita.`}
+        confirmLabel={deletingBatch ? "Excluindo..." : "Excluir"}
+        variant="danger"
+        onConfirm={handleBatchDeleteItems}
+        onCancel={() => setPendingBatchDelete(null)}
       />
 
       {/* Modal: criar/editar fila */}

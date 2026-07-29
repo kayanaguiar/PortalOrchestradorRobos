@@ -299,6 +299,10 @@ export async function deleteQueueItem(orchestratorId, folderId, itemId) {
   return postRequest("/queues/items/delete", { orchestratorId, folderId, itemId });
 }
 
+export async function deleteQueueItemsBatch(orchestratorId, folderId, itemIds) {
+  return postRequest("/queues/items/delete-batch", { orchestratorId, folderId, itemIds });
+}
+
 // ─── Buckets ─────────────────────────────────────
 // Buckets são folder-scoped — folderId obrigatório nas operações.
 
