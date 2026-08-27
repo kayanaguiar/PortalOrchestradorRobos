@@ -35,6 +35,13 @@ import CustomSelect from "../CustomSelect";
 
 const bucketKey = (b) => `${b._orchestratorId}::${b.Id}`;
 
+function formatDateTime(ts) {
+  if (!ts) return "—";
+  const d = new Date(ts);
+  return d.toLocaleDateString("pt-BR", { day: "2-digit", month: "2-digit", year: "numeric" }) +
+    " " + d.toLocaleTimeString("pt-BR", { hour: "2-digit", minute: "2-digit" });
+}
+
 function formatSize(bytes) {
   if (bytes === null || bytes === undefined) return "—";
   if (bytes < 1024) return `${bytes} B`;
@@ -490,6 +497,9 @@ export default function BucketsPage({ addToast, userRole }) {
                               <div key={path} className="px-3 py-2.5 flex items-center gap-3 hover:bg-white/[0.02]">
                                 <FileText className="w-3.5 h-3.5 text-white/20 shrink-0" />
                                 <span className="text-xs text-white/70 font-mono truncate flex-1 min-w-0">{path}</span>
+                                {file.LastModified && (
+                                  <span className="text-[10px] text-white/30 font-mono shrink-0 hidden sm:inline">{formatDateTime(file.LastModified)}</span>
+                                )}
                                 <span className="text-[10px] text-white/25 font-mono shrink-0">{formatSize(file.Size)}</span>
                                 <div className="flex items-center gap-1.5 shrink-0">
                                   <button

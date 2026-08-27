@@ -5,6 +5,16 @@ function getAuthHeaders() {
   return token ? { Authorization: `Bearer ${token}` } : {};
 }
 
+// Mensagem de erro limpa: desembrulha o {detail} do FastAPI (evita mostrar JSON cru no toast).
+async function errorMessage(res) {
+  let detail = await res.text().catch(() => res.statusText);
+  try {
+    const j = JSON.parse(detail);
+    if (j && j.detail) detail = j.detail;
+  } catch { /* não era JSON */ }
+  return `API ${res.status}: ${detail}`;
+}
+
 async function request(endpoint, params = {}) {
   const url = new URL(endpoint, window.location.origin);
   Object.entries(params).forEach(([key, value]) => {
@@ -46,8 +56,7 @@ async function postRequest(endpoint, body) {
     throw new Error(detail.detail || "Sem permissão para esta ação");
   }
   if (!res.ok) {
-    const detail = await res.text().catch(() => res.statusText);
-    throw new Error(`API ${res.status}: ${detail}`);
+    throw new Error(await errorMessage(res));
   }
   return res.json();
 }
@@ -69,8 +78,7 @@ async function putRequest(endpoint, body) {
     throw new Error(detail.detail || "Sem permissão para esta ação");
   }
   if (!res.ok) {
-    const detail = await res.text().catch(() => res.statusText);
-    throw new Error(`API ${res.status}: ${detail}`);
+    throw new Error(await errorMessage(res));
   }
   return res.json();
 }
@@ -91,8 +99,7 @@ async function deleteRequest(endpoint) {
     throw new Error(detail.detail || "Sem permissão para esta ação");
   }
   if (!res.ok) {
-    const detail = await res.text().catch(() => res.statusText);
-    throw new Error(`API ${res.status}: ${detail}`);
+    throw new Error(await errorMessage(res));
   }
   return res.json();
 }
@@ -353,8 +360,7 @@ export async function uploadBucketFile({ bucketId, orchestratorId, folderId, pat
     throw new Error("Sessão expirada");
   }
   if (!res.ok) {
-    const detail = await res.text().catch(() => res.statusText);
-    throw new Error(`API ${res.status}: ${detail}`);
+    throw new Error(await errorMessage(res));
   }
   return res.json();
 }
@@ -367,8 +373,7 @@ export async function downloadBucketFile({ bucketId, orchestratorId, folderId, p
   url.searchParams.set("path", path);
   const res = await fetch(url, { headers: token ? { Authorization: `Bearer ${token}` } : {} });
   if (!res.ok) {
-    const detail = await res.text().catch(() => res.statusText);
-    throw new Error(`API ${res.status}: ${detail}`);
+    throw new Error(await errorMessage(res));
   }
   const blob = await res.blob();
   const filename = path.split("/").pop() || "download";

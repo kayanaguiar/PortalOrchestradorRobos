@@ -514,8 +514,12 @@ export default function QueuesPage({ addToast, userRole }) {
   const handleRetryItem = useCallback(async (queue, item) => {
     setItemActionId(item.Id);
     try {
-      await retryQueueItem(queue._orchestratorId, queue._folderId, item.Id);
-      addToast?.("success", "Transação reenfileirada para reprocessamento");
+      const res = await retryQueueItem(queue._orchestratorId, queue._folderId, item.Id);
+      if (res?.suffixed) {
+        addToast?.("success", `Reprocessada com nova referência: "${res.reference}" (a fila exige referência única)`);
+      } else {
+        addToast?.("success", "Transação reenfileirada para reprocessamento");
+      }
       refreshItems(queue);
     } catch (err) {
       addToast?.("error", `Erro ao reprocessar: ${err.message}`);

@@ -1,6 +1,7 @@
 import os
 import re
 from datetime import datetime, timezone, timedelta
+from email.utils import parsedate_to_datetime
 from dotenv import load_dotenv
 
 load_dotenv(os.path.join(os.path.dirname(__file__), "..", ".env"))
@@ -1396,12 +1397,25 @@ async def retry_queue_item(req: QueueItemActionRequest, _user: dict = Depends(re
         "Priority": item.get("Priority") or "Normal",
         "SpecificContent": item.get("SpecificContent") or {},
     }
-    if item.get("Reference"):
-        item_data["Reference"] = item["Reference"]
-    result = await uipath_post(orch, "Queues/UiPathODataSvc.AddQueueItem", {"itemData": item_data}, folder_id=req.folderId)
+    original_ref = item.get("Reference")
+    if original_ref:
+        item_data["Reference"] = original_ref
+    suffixed = False
+    try:
+        await uipath_post(orch, "Queues/UiPathODataSvc.AddQueueItem", {"itemData": item_data}, folder_id=req.folderId)
+    except HTTPException as e:
+        detail = str(e.detail)
+        # Fila com referência única: não dá pra duplicar a referência → reprocessa com sufixo.
+        if ("Duplicate Reference" in detail or "1016" in detail) and original_ref:
+            stamp = datetime.now(timezone(timedelta(hours=-3))).strftime("%d/%m %H:%M:%S")
+            item_data["Reference"] = f"{original_ref} (retry {stamp})"
+            suffixed = True
+            await uipath_post(orch, "Queues/UiPathODataSvc.AddQueueItem", {"itemData": item_data}, folder_id=req.folderId)
+        else:
+            raise
     clear_cache()
     _save_audit(_user, "queue.item.retry", qdef.get("Name") or str(req.itemId), req.orchestratorId, orch.get("name"))
-    return result
+    return {"status": "ok", "reference": item_data.get("Reference"), "suffixed": suffixed}
 
 
 # ─── Buckets (Storage Buckets + arquivos) ─────────────────
@@ -1411,6 +1425,19 @@ async def retry_queue_item(req: QueueItemActionRequest, _user: dict = Depends(re
 # Upload/download passam pelos URIs pré-assinados devolvidos por Get(Write|Read)Uri.
 
 BUCKET_FN = "UiPath.Server.Configuration.OData"
+
+# Teto de arquivos pra buscar a data real (2 req/arquivo). Acima disso, ordena por nome.
+BUCKET_FILE_DATE_MAX = 100
+
+
+def _http_date_to_iso(s: str | None) -> str | None:
+    """Converte um header HTTP-date (ex.: 'Tue, 14 Jul 2026 18:50:48 GMT') em ISO UTC."""
+    if not s:
+        return None
+    try:
+        return parsedate_to_datetime(s).astimezone(timezone.utc).isoformat()
+    except Exception:
+        return None
 
 
 def _access_headers(dto: dict) -> dict:
@@ -1447,13 +1474,53 @@ async def get_bucket_files(
     _user: dict = Depends(require_viewer),
 ):
     """Lista os arquivos de um bucket (action GetFiles, params via query string).
-    recursive=true (padrão) traz também os arquivos em subpastas — sem ele, o UiPath
-    só lista a raiz e buckets com arquivos em subdiretórios apareceriam vazios."""
+    recursive=true (padrão) traz também os arquivos em subpastas.
+
+    O UiPath não devolve data na listagem; então, pra buckets pequenos (<= BUCKET_FILE_DATE_MAX),
+    enriquecemos cada arquivo com a data real (LastModified do blob, via GetReadUri + HEAD) e
+    ordenamos do mais recente. Acima do teto, ordena por caminho (sem data) pra não sobrecarregar.
+    Resultado cacheado (30s) — clear_cache() após upload/delete mantém consistente."""
+    import asyncio
     orch = _find_orchestrator(orchestrator_id, user=_user)
-    return await uipath_get(
+    cache_key = f"bucketfiles:{bucket_id}:{folder_id}:{directory}:{recursive}"
+    cached = get_cached(cache_key, ttl=30)
+    if cached:
+        return cached
+
+    data = await uipath_get(
         orch, f"Buckets({bucket_id})/{BUCKET_FN}.GetFiles",
         params={"directory": directory, "recursive": str(recursive).lower()}, folder_id=folder_id,
     )
+    files = [f for f in data.get("value", []) if not f.get("IsDirectory")]
+
+    if len(files) <= BUCKET_FILE_DATE_MAX:
+        token = await get_token(orch["id"], orch["clientId"], orch["clientSecret"])
+        sem = asyncio.Semaphore(15)
+        async with httpx.AsyncClient(timeout=15.0, follow_redirects=True) as client:
+            async def enrich(f):
+                async with sem:
+                    try:
+                        acc = await uipath_get(
+                            orch, f"Buckets({bucket_id})/{BUCKET_FN}.GetReadUri",
+                            params={"path": f["FullPath"]}, folder_id=folder_id,
+                        )
+                        headers = _access_headers(acc)
+                        if acc.get("RequiresAuth"):
+                            headers["Authorization"] = f"Bearer {token}"
+                        rh = await client.head(acc.get("Uri"), headers=headers)
+                        lm = rh.headers.get("Last-Modified") or rh.headers.get("x-ms-creation-time")
+                        f["LastModified"] = _http_date_to_iso(lm)
+                    except Exception:
+                        f["LastModified"] = None
+            await asyncio.gather(*[enrich(f) for f in files])
+        files.sort(key=lambda f: f.get("LastModified") or "", reverse=True)
+        result = {"value": files, "datesIncluded": True}
+    else:
+        files.sort(key=lambda f: f.get("FullPath") or "", reverse=True)
+        result = {"value": files, "datesIncluded": False}
+
+    set_cached(cache_key, result)
+    return result
 
 
 class CreateBucketRequest(BaseModel):
